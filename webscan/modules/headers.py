@@ -4,6 +4,7 @@ Checks security headers, cookies, server banners, CORS, CSP quality,
 and fetches well-known files (robots.txt, security.txt, crossdomain.xml).
 """
 
+import json
 import re
 import urllib.request
 import urllib.error
@@ -13,7 +14,7 @@ from http.client import HTTPResponse
 
 from webscan.models import Category, Finding, Severity
 from webscan.modules.base import BaseModule
-from webscan.http_log import logged_request
+from webscan.http_log import log_entry, logged_request
 
 
 # Required security headers and their missing-header findings
@@ -99,6 +100,10 @@ class HeadersModule(BaseModule):
 
     def execute(self, target: str) -> list[Finding]:
         headers = self._fetch_headers(target)
+        self._save_raw_output(
+            json.dumps({"target": target, "headers": headers}, indent=2),
+            "headers-raw.json",
+        )
         findings = self.parse_output(headers)
 
         # Additional checks that fetch separate URLs
@@ -591,16 +596,23 @@ class HeadersModule(BaseModule):
             http_url = f"http://{hostname}{':' + str(parsed.port) if parsed.port and parsed.port != 443 else ''}{path}"
             try:
                 # Don't follow redirects — we want to see the redirect itself
-                ctx = ssl.create_default_context()
-                req = urllib.request.Request(http_url, method="GET")
-                req.add_header("User-Agent", "webscan/0.1.0")
                 import http.client
+                import time as _time
+                _start = _time.time()
+                req_hdrs = {"User-Agent": "webscan/0.1.0", "Host": hostname}
                 conn = http.client.HTTPConnection(hostname, parsed.port or 80, timeout=10)
-                conn.request("GET", path, headers={"User-Agent": "webscan/0.1.0", "Host": hostname})
+                conn.request("GET", path, headers=req_hdrs)
                 resp = conn.getresponse()
                 status = resp.status
                 location_header = resp.getheader("Location", "")
+                _dur = int((_time.time() - _start) * 1000)
                 conn.close()
+                log_entry(
+                    url=http_url, status=status,
+                    request_headers=req_hdrs,
+                    response_headers={"Location": location_header} if location_header else {},
+                    duration_ms=_dur, module_name=self.name,
+                )
 
                 if status == 200:
                     findings.append(Finding(
@@ -647,11 +659,9 @@ class HeadersModule(BaseModule):
             # Target is HTTP — check if HTTPS is available
             https_url = f"https://{hostname}{':' + str(parsed.port) if parsed.port and parsed.port != 80 else ''}{path}"
             try:
-                ctx = ssl.create_default_context()
-                req = urllib.request.Request(https_url, method="HEAD")
-                req.add_header("User-Agent", "webscan/0.1.0")
-                with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
-                    pass  # HTTPS works — site should be using it
+                result = logged_request(https_url, method="HEAD", module_name=self.name, timeout=10)
+                if result is None:
+                    raise OSError("HTTPS not reachable")
                 findings.append(Finding(
                     title="Site accessible over HTTP but HTTPS is available",
                     severity=Severity.MEDIUM,

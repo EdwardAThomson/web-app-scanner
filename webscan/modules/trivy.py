@@ -52,6 +52,7 @@ class TrivyModule(BaseModule):
             cmd = [self.tool_binary, "fs", "--format", "json", target]
 
         result = self.run_command(cmd, timeout=timeout)
+        self._save_raw_output(result.stdout, "trivy-raw.json")
         return self.parse_output(result.stdout)
 
     def parse_output(self, raw_output: str) -> list[Finding]:

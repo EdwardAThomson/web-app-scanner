@@ -373,11 +373,9 @@ def write_reports(
     """Write reports in the requested formats. Returns {format: filepath}."""
     paths = {}
 
-    # JSON is always written
+    # JSON and HTML are always written
     paths["json"] = write_json_report(scan_result, output_dir)
-
-    if "html" in formats:
-        paths["html"] = write_html_report(scan_result, output_dir, checklist_summary)
+    paths["html"] = write_html_report(scan_result, output_dir, checklist_summary)
 
     if "md" in formats or "markdown" in formats:
         paths["md"] = write_markdown_report(scan_result, output_dir, checklist_summary)

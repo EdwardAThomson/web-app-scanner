@@ -14,13 +14,11 @@ import json
 import os
 import re
 import subprocess
-import urllib.request
-import urllib.error
-import ssl
 from pathlib import Path
 
 from webscan.models import Category, Finding, Severity
 from webscan.modules.base import BaseModule
+from webscan.http_log import logged_request
 
 # Top npm packages by downloads — used for typosquat comparison
 # This is a representative subset; a production version would use a larger list
@@ -124,9 +122,12 @@ class DepsModule(BaseModule):
 
         try:
             with open(pkg_json_path) as f:
-                pkg_data = json.load(f)
+                pkg_raw = f.read()
+                pkg_data = json.loads(pkg_raw)
         except (json.JSONDecodeError, OSError):
             return findings
+
+        self._save_raw_output(pkg_raw, "deps-raw.json")
 
         # Collect all dependency names
         all_deps = {}
@@ -218,37 +219,37 @@ class DepsModule(BaseModule):
     def _check_popularity(self, deps: dict, location: str) -> list[Finding]:
         """Query npm registry for download counts and flag low-popularity packages."""
         findings = []
-        ctx = ssl.create_default_context()
 
         # Batch check — limit to avoid excessive API calls
         for dep_name in list(deps.keys())[:50]:
+            url = f"https://api.npmjs.org/downloads/point/last-week/{dep_name}"
+            result = logged_request(url, module_name=self.name, timeout=10)
+            if result is None:
+                continue
+            _status, body, _headers = result
             try:
-                url = f"https://api.npmjs.org/downloads/point/last-week/{dep_name}"
-                req = urllib.request.Request(url)
-                req.add_header("User-Agent", "webscan/0.1.0")
-                with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
-                    data = json.loads(resp.read().decode())
-                    downloads = data.get("downloads", 0)
+                data = json.loads(body)
+                downloads = data.get("downloads", 0)
 
-                    if downloads < MIN_DOWNLOADS:
-                        findings.append(Finding(
-                            title=f"Low-popularity package: '{dep_name}' ({downloads} weekly downloads)",
-                            severity=Severity.MEDIUM,
-                            category=Category.DEPENDENCY,
-                            source=self.name,
-                            description=f"Package '{dep_name}' has only {downloads} weekly downloads. "
-                                        "Low-popularity packages are higher risk for supply chain attacks.",
-                            location=location,
-                            evidence=f"{dep_name}: {downloads} downloads/week",
-                            remediation=f"Inspect the source code of '{dep_name}' manually before trusting it. "
-                                        "Consider if a more established alternative exists.",
-                            metadata={
-                                "package": dep_name,
-                                "weekly_downloads": downloads,
-                            },
-                        ))
-            except (urllib.error.URLError, OSError, json.JSONDecodeError):
-                continue  # Registry unavailable, skip
+                if downloads < MIN_DOWNLOADS:
+                    findings.append(Finding(
+                        title=f"Low-popularity package: '{dep_name}' ({downloads} weekly downloads)",
+                        severity=Severity.MEDIUM,
+                        category=Category.DEPENDENCY,
+                        source=self.name,
+                        description=f"Package '{dep_name}' has only {downloads} weekly downloads. "
+                                    "Low-popularity packages are higher risk for supply chain attacks.",
+                        location=location,
+                        evidence=f"{dep_name}: {downloads} downloads/week",
+                        remediation=f"Inspect the source code of '{dep_name}' manually before trusting it. "
+                                    "Consider if a more established alternative exists.",
+                        metadata={
+                            "package": dep_name,
+                            "weekly_downloads": downloads,
+                        },
+                    ))
+            except json.JSONDecodeError:
+                continue
 
         return findings
 

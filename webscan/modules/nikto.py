@@ -2,7 +2,6 @@
 
 import json
 import os
-import tempfile
 from pathlib import Path
 
 from webscan.models import Category, Finding, Severity
@@ -57,8 +56,7 @@ class NiktoModule(BaseModule):
         mod_config = self.config.get("modules", {}).get("nikto", {})
         timeout = mod_config.get("timeout", 600)
 
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-            tmp_path = tmp.name
+        tmp_path = self._raw_file_path("nikto-raw.json")
 
         cmd = [
             self.tool_binary,

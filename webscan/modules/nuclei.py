@@ -60,6 +60,7 @@ class NucleiModule(BaseModule):
             cmd.extend(["-severity", severity_filter])
 
         result = self.run_command(cmd, timeout=timeout)
+        self._save_raw_output(result.stdout, "nuclei-raw.jsonl")
         return self.parse_output(result.stdout)
 
     def parse_output(self, raw_output: str) -> list[Finding]:

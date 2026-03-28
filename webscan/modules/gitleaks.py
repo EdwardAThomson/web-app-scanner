@@ -1,7 +1,6 @@
 """Gitleaks wrapper module."""
 
 import json
-import tempfile
 
 from webscan.models import Category, Finding, Severity
 from webscan.modules.base import BaseModule
@@ -27,8 +26,7 @@ class GitleaksModule(BaseModule):
         # For gitleaks, "target" is the repo path (from config or target arg)
         repo_path = mod_config.get("repo_path", target)
 
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-            tmp_path = tmp.name
+        tmp_path = self._raw_file_path("gitleaks-raw.json")
 
         cmd = [
             self.tool_binary,

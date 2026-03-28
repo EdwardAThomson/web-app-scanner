@@ -127,12 +127,134 @@ Group 4 (targeted):     sqlmap (benefits from earlier findings)
 26. Finding deduplication across tools
 27. Baseline diff mode (`--diff` to compare against previous scan)
 
-### Phase 4 — Advanced integrations
-27. ZAP integration (daemon + REST API) — covers XSS, CSRF, session fixation, file upload, auth bypass
-28. New custom module: `jwt.py` — algorithm confusion, weak secrets, missing expiry
-29. New custom module: `graphql.py` — introspection, query depth, batch abuse
-30. Lynis module (server-side auditing)
-31. Authenticated scanning support (session tokens in config, multi-user auth contexts)
+### Phase 4 — Spider / site crawling
+
+The built-in modules currently only scan the single URL provided via `-t`. They don't follow links, discover subpages, or probe common paths. A spider pre-phase fixes this.
+
+**Design:** The spider is a separate pre-phase, not a module — it discovers URLs, it doesn't produce findings. It runs before any modules, and feeds the discovered URL list into the existing module pipeline.
+
+**Flow:** `spider crawls site` → `discovered URL list` → `each module runs against each URL` → `deduplicate findings` → `report`
+
+**Key decisions:**
+- Modules stay unchanged — they already work on one URL. The runner calls them once per discovered URL instead of once total
+- Off by default — enabled via `--spider` flag so existing behavior is preserved
+- Same-origin scope — only follows links on the same host
+- All spider traffic uses `logged_request()` and appears in the HTTP log as `module: "spider"`
+
+**Spider implementation (`webscan/spider.py`):**
+- BFS crawl starting from target URL
+- HTML link extraction: `<a href>`, `<form action>`, `<link href>`, `<script src>`, `<iframe src>`
+- URL normalization via `urllib.parse.urljoin`, deduplication, fragment stripping
+- Scope enforcement: same-origin (scheme+host+port) by default, configurable
+- robots.txt respect via `urllib.robotparser.RobotFileParser`
+- Concurrency via `ThreadPoolExecutor` with rate limiting
+- Outputs: `spider-results.json` (full metadata) + `spider-urls.txt` (one URL per line, for external tools)
+
+**Configuration (`config/default.yaml` spider section):**
+```yaml
+spider:
+  enabled: false
+  max_depth: 3
+  max_pages: 50
+  scope: "same-origin"    # same-origin | same-domain | subdomain
+  respect_robots: true
+  rate_limit: 10          # requests/second
+  timeout: 300
+  workers: 5
+  exclude_patterns: []    # regex patterns to skip, e.g. "/logout", "\.pdf$"
+```
+
+**CLI integration (`webscan/cli.py`):**
+- New flags: `--spider / --no-spider`, `--spider-depth N`, `--spider-max-pages N`
+- Spider runs after config build / scan_dir creation, before module execution
+- Module targets expand: each URL-type module gets one invocation per discovered URL
+- Display: `"Spider found 23 pages (depth 3, 1.2s)"`
+
+**Runner changes (`webscan/runner.py`):**
+- No structural change needed — it already handles `list[tuple[BaseModule, str]]`
+- 20 URLs × 4 modules = 80 entries in the pool (naturally parallel)
+- Progress display groups by module name: `"headers (5/20 URLs)..."`
+- Each module instance is fresh per URL (instance state like `_raw_output_path` stays isolated)
+
+**Finding deduplication (`webscan/dedup.py`):**
+- Group findings by `(title, severity, category, source)`
+- Consolidate duplicates: keep one finding, add `metadata["affected_urls"]` list and `metadata["occurrence_count"]`
+- "Missing HSTS header" on 20 pages becomes one finding with "Found on 20 pages"
+- Controlled by config flag, on by default when spider is enabled
+
+**External tool support:**
+- nuclei: supports `-l urls.txt` — switch from `-u` to `-l` when spider URL file exists
+- nikto: supports `-host` with a file — same adaptation
+- sqlmap: discovered URLs with query parameters fed as individual targets
+- ffuf: no change needed (does its own path discovery via wordlists)
+
+**Data model additions (`webscan/models.py`):**
+- `@dataclass UrlMeta`: url, status_code, content_type, depth, discovered_from
+- `@dataclass SpiderResult`: urls, url_metadata, robots_disallowed, duration_seconds, pages_crawled, start_url
+- `ScanResult` gets optional `spider_result` field for inclusion in reports
+
+**Report updates:**
+- Spider summary in report header (pages crawled, depth, duration)
+- "Discovered Pages" section in HTML report with URL tree
+- Findings with `occurrence_count` display "Found on N pages" instead of repeating
+
+**Two-tier spider strategy:**
+
+The built-in spider (this phase) is lightweight and dependency-free but has limitations. ZAP (Phase 5) has a full-featured spider with JS rendering and auth support. Both feed into the same `SpiderResult` interface, so the rest of the pipeline (modules, dedup, reports) doesn't care which spider produced the URL list.
+
+| | Built-in spider (Phase 4) | ZAP spider (Phase 5) |
+|---|---|---|
+| **Dependencies** | None (pure Python, stdlib) | Java + ZAP daemon |
+| **HTML crawling** | Yes | Yes |
+| **JavaScript/SPA** | No — can't execute JS | Yes — AJAX spider uses headless browser |
+| **Authenticated crawling** | No | Yes — ZAP session management |
+| **Speed** | Fast (lightweight) | Slower (full browser for AJAX spider) |
+| **When to use** | Quick scans, CI pipelines, no Java available | Full assessments, SPAs, auth-protected sites |
+
+The CLI selects the spider backend automatically: uses ZAP's spider if ZAP is running and available, otherwise falls back to the built-in spider. Users can force one or the other via config:
+
+```yaml
+spider:
+  backend: "auto"       # auto | builtin | zap
+```
+
+When `backend: "auto"`:
+1. Check if ZAP daemon is reachable (default `http://localhost:8080`)
+2. If yes → use ZAP's traditional spider + AJAX spider, convert results to `SpiderResult`
+3. If no → use built-in spider
+
+This means the built-in spider is never wasted work — it serves as the always-available fallback and the fast option for CI, while ZAP provides the deep crawl when available.
+
+**Known limitations (built-in spider v1):**
+- No JavaScript rendering — SPA link discovery is limited (ZAP's AJAX spider covers this)
+- No authenticated crawling — pages behind login return 302/401 (ZAP covers this)
+- Session module makes 10 requests per URL — may need reduced sample size when spidering many pages
+
+**Implementation order:**
+1. `webscan/models.py` — add `UrlMeta`, `SpiderResult`
+2. `config/default.yaml` — add `spider:` section
+3. `webscan/spider.py` — BFS crawl, link extraction, scope/depth/robots
+4. `webscan/dedup.py` — finding deduplication
+5. `webscan/cli.py` — `--spider` flags, pre-phase insertion, target expansion
+6. `webscan/runner.py` — progress display for multi-URL runs
+7. External tool modules — `-l` URL file support
+8. `webscan/report.py` — spider summary, occurrence count display
+9. Tests — `test_spider.py`, `test_dedup.py`
+
+### Phase 5 — Advanced integrations
+
+**ZAP integration (`webscan/modules/zap.py`):**
+- Connects to ZAP daemon via REST API (`http://localhost:8080` by default)
+- Active scan: XSS, CSRF, session fixation, file upload, auth bypass
+- Spider integration: ZAP's traditional spider + AJAX spider feed into `SpiderResult`, used as the spider backend when `spider.backend` is `"auto"` or `"zap"`
+- Session management: ZAP handles authenticated crawling via configured contexts
+- Configuration: `zap.api_key`, `zap.address`, `zap.port`, `zap.context`
+
+Other advanced integrations:
+33. New custom module: `jwt.py` — algorithm confusion, weak secrets, missing expiry
+34. New custom module: `graphql.py` — introspection, query depth, batch abuse
+35. Lynis module (server-side auditing)
+36. Authenticated scanning support (session tokens in config, multi-user auth contexts)
 
 ## Key Design Decisions
 

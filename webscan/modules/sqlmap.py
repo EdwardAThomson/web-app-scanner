@@ -2,7 +2,6 @@
 
 import json
 import os
-import tempfile
 
 from webscan.models import Category, Finding, Severity
 from webscan.modules.base import BaseModule
@@ -49,7 +48,13 @@ class SqlmapModule(BaseModule):
         mod_config = self.config.get("modules", {}).get("sqlmap", {})
         timeout = mod_config.get("timeout", 600)
 
-        output_dir = tempfile.mkdtemp(prefix="sqlmap-")
+        scan_dir = self.config.get("scan_dir", "")
+        if scan_dir:
+            output_dir = os.path.join(scan_dir, "sqlmap")
+            os.makedirs(output_dir, exist_ok=True)
+        else:
+            import tempfile
+            output_dir = tempfile.mkdtemp(prefix="sqlmap-")
 
         cmd = [
             self._python(),
@@ -70,7 +75,9 @@ class SqlmapModule(BaseModule):
         result = self.run_command(cmd, timeout=timeout)
 
         # SQLMap writes to stdout — combine with stderr for full picture
-        return self.parse_output(result.stdout + "\n" + result.stderr)
+        combined = result.stdout + "\n" + result.stderr
+        self._save_raw_output(combined, "sqlmap-raw.txt")
+        return self.parse_output(combined)
 
     def parse_output(self, raw_output: str) -> list[Finding]:
         findings = []

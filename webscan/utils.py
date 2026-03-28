@@ -18,6 +18,17 @@ def timestamp_filename(prefix: str, ext: str = "json") -> str:
     return f"{prefix}-{ts}.{ext}"
 
 
+def create_scan_dir(output_dir: str) -> str:
+    """Create a timestamped sub-directory for a single scan run.
+
+    Returns the absolute path to the created directory.
+    """
+    ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    scan_dir = os.path.join(os.path.abspath(output_dir), f"webscan-{ts}")
+    os.makedirs(scan_dir, exist_ok=True)
+    return scan_dir
+
+
 def tool_available(binary: str) -> tuple[bool, str]:
     """Check if a binary is available in PATH."""
     path = shutil.which(binary)

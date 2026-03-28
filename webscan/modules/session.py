@@ -7,16 +7,18 @@ Collects session cookies from multiple requests and analyzes:
 - Sensitive-looking cookie values
 """
 
+import json
 import math
 import re
-import urllib.request
-import urllib.error
 import ssl
+import time
+import urllib.error
+import urllib.request
 from collections import Counter
 
 from webscan.models import Category, Finding, Severity
 from webscan.modules.base import BaseModule
-from webscan.http_log import logged_request
+from webscan.http_log import log_entry
 
 # Common session cookie names across frameworks
 SESSION_COOKIE_NAMES = {
@@ -50,6 +52,10 @@ class SessionModule(BaseModule):
         samples = self._collect_sessions(target, SAMPLE_SIZE)
         if not samples:
             return []
+        self._save_raw_output(
+            json.dumps({"target": target, "samples": samples}, indent=2),
+            "session-raw.json",
+        )
         return self._analyze_sessions(samples, target)
 
     def _collect_sessions(self, target: str, count: int) -> list[dict]:
@@ -59,12 +65,14 @@ class SessionModule(BaseModule):
         """
         samples = []
         ctx = ssl.create_default_context()
+        req_headers = {"User-Agent": "webscan/0.1.0"}
 
         for _ in range(count):
+            start = time.time()
             try:
-                req = urllib.request.Request(target, method="GET")
-                req.add_header("User-Agent", "webscan/0.1.0")
+                req = urllib.request.Request(target, method="GET", headers=req_headers)
                 with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+                    duration_ms = int((time.time() - start) * 1000)
                     cookies = {}
                     for key, value in resp.headers.items():
                         if key.lower() == "set-cookie":
@@ -74,6 +82,12 @@ class SessionModule(BaseModule):
                                 "value": cookie_value,
                                 "raw": value,
                             }
+                    log_entry(
+                        url=target, status=resp.status,
+                        request_headers=req_headers,
+                        response_headers=dict(resp.headers),
+                        duration_ms=duration_ms, module_name=self.name,
+                    )
                     if cookies:
                         samples.append(cookies)
             except (urllib.error.URLError, OSError):

@@ -1,7 +1,6 @@
 """testssl.sh wrapper module."""
 
 import json
-import tempfile
 
 from webscan.models import Category, Finding, Severity
 from webscan.modules.base import BaseModule
@@ -35,8 +34,7 @@ class TestSSLModule(BaseModule):
 
     def execute(self, target: str) -> list[Finding]:
         timeout = self.config.get("modules", {}).get("testssl", {}).get("timeout", 600)
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-            tmp_path = tmp.name
+        tmp_path = self._raw_file_path("testssl-raw.json")
 
         cmd = [
             self.tool_binary,

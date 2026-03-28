@@ -94,6 +94,7 @@ class FormsModule(BaseModule):
         body = self._fetch_page(target)
         if body is None:
             return []
+        self._save_raw_output(body, "forms-raw.html")
         return self.parse_output(body, target)
 
     def _fetch_page(self, target: str) -> str | None:

@@ -124,6 +124,7 @@ class DisclosureModule(BaseModule):
         if body is None:
             return []
 
+        self._save_raw_output(body, "disclosure-raw.txt")
         findings = self.parse_output(body, target, headers)
 
         # Also scan linked JS files for API keys

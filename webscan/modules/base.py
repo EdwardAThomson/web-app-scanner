@@ -1,5 +1,6 @@
 """Abstract base class for all scanner modules."""
 
+import os
 import re
 import shutil
 import subprocess
@@ -19,6 +20,7 @@ class BaseModule(ABC):
 
     def __init__(self, config: dict):
         self.config = config
+        self._raw_output_path = ""
 
     def check_installed(self) -> tuple[bool, str]:
         """Check if the external tool is available.
@@ -81,6 +83,7 @@ class BaseModule(ABC):
                 findings=findings,
                 duration_seconds=time.time() - start,
                 tool_version=self.get_version(),
+                raw_output_path=self._raw_output_path,
             )
         except subprocess.TimeoutExpired:
             return ModuleResult(
@@ -96,6 +99,34 @@ class BaseModule(ABC):
                 error=str(e),
                 duration_seconds=time.time() - start,
             )
+
+    def _save_raw_output(self, content: str, filename: str) -> str:
+        """Save raw tool output to the scan directory. Returns the file path."""
+        scan_dir = self.config.get("scan_dir", "")
+        if not scan_dir:
+            return ""
+        path = os.path.join(scan_dir, filename)
+        with open(path, "w") as f:
+            f.write(content)
+        self._raw_output_path = path
+        return path
+
+    def _raw_file_path(self, filename: str) -> str:
+        """Return a path inside scan_dir for the tool to write to directly.
+
+        Falls back to a temp file if scan_dir is not set (e.g. in tests).
+        """
+        scan_dir = self.config.get("scan_dir", "")
+        if scan_dir:
+            path = os.path.join(scan_dir, filename)
+            self._raw_output_path = path
+            return path
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=os.path.splitext(filename)[1], delete=False
+        )
+        tmp.close()
+        return tmp.name
 
     @abstractmethod
     def execute(self, target: str) -> list[Finding]:

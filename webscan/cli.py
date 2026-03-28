@@ -10,6 +10,7 @@ from webscan.http_log import init_log, close_log
 from webscan.modules import DEFAULT_ORDER, MODULES
 from webscan.report import print_summary, write_reports
 from webscan.runner import run_scan
+from webscan.utils import create_scan_dir
 
 console = Console()
 
@@ -163,6 +164,10 @@ def run(modules, target, source_path, output_dir, formats, config_file, skip, se
         config_file=config_file,
     )
 
+    # Create a timestamped sub-directory for all scan outputs
+    scan_dir = create_scan_dir(output_dir)
+    config["scan_dir"] = scan_dir
+
     # Filter modules by available targets and build (module, target) pairs
     module_targets: list[tuple[str, str]] = []
     skipped = []
@@ -194,8 +199,8 @@ def run(modules, target, source_path, output_dir, formats, config_file, skip, se
     console.print(f"Modules: {', '.join(name for name, _ in module_targets)}")
     console.print()
 
-    # Initialize HTTP request/response logging
-    http_log_path = init_log(output_dir)
+    # Initialize HTTP request/response logging inside the scan directory
+    http_log_path, http_log_readable = init_log(scan_dir)
 
     # Run the scan (parallel by default, --serial for sequential)
     scan_result = run_scan(module_instances, target or source_path, serial=serial)
@@ -214,13 +219,15 @@ def run(modules, target, source_path, output_dir, formats, config_file, skip, se
                   f"({checklist_summary['with_issues']} with issues, {checklist_summary['passed']} passed) "
                   f"of {checklist_summary['total_items']} total")
 
-    # Write reports in requested formats
-    report_paths = write_reports(scan_result, output_dir, list(formats), checklist_summary)
+    # Write reports inside the scan directory
+    report_paths = write_reports(scan_result, scan_dir, list(formats), checklist_summary)
 
     console.print()
+    console.print(f"[bold green]Scan directory:[/bold green] {scan_dir}")
     for fmt, path in report_paths.items():
-        console.print(f"[bold green]{fmt.upper()} report:[/bold green] {path}")
-    console.print(f"[bold green]HTTP log:[/bold green] {http_log_path}")
+        console.print(f"  {fmt.upper()} report: {path}")
+    console.print(f"  HTTP log: {http_log_readable}")
+    console.print(f"  HTTP log (JSONL): {http_log_path}")
 
 
 def main():

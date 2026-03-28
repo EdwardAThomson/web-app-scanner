@@ -1,7 +1,6 @@
 """ffuf wrapper module."""
 
 import json
-import tempfile
 
 from webscan.models import Category, Finding, Severity
 from webscan.modules.base import BaseModule
@@ -48,8 +47,7 @@ class FfufModule(BaseModule):
                 "No wordlist found. Set modules.ffuf.wordlist in config or install seclists/dirb."
             )
 
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-            tmp_path = tmp.name
+        tmp_path = self._raw_file_path("ffuf-raw.json")
 
         # Ensure target URL has FUZZ keyword
         fuzz_url = target

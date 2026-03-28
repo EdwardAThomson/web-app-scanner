@@ -5,14 +5,13 @@ applications, then optionally tests discovered endpoints for common issues
 like unauthenticated access.
 """
 
+import json
 import os
 import re
-import urllib.request
-import urllib.error
-import ssl
 
 from webscan.models import Category, Finding, Severity
 from webscan.modules.base import BaseModule
+from webscan.http_log import logged_request
 
 # Route patterns for common frameworks
 EXPRESS_PATTERNS = [
@@ -66,6 +65,15 @@ class ApiRoutesModule(BaseModule):
             routes = self._discover_routes(source_path)
             if not routes:
                 return findings
+
+            self._save_raw_output(
+                json.dumps(
+                    [{"method": m, "path": p, "location": loc, "framework": fw}
+                     for m, p, loc, fw in routes],
+                    indent=2,
+                ),
+                "api_routes-raw.json",
+            )
 
             # Report discovered routes as INFO findings
             for method, path, file_loc, framework in routes:
@@ -156,7 +164,6 @@ class ApiRoutesModule(BaseModule):
         """Test discovered routes for unauthenticated access."""
         findings = []
         base_url = base_url.rstrip("/")
-        ctx = ssl.create_default_context()
         tested = set()
 
         for method, path, file_loc, framework in routes:
@@ -175,35 +182,29 @@ class ApiRoutesModule(BaseModule):
                 continue
 
             url = base_url + path
-            try:
-                req = urllib.request.Request(url, method="GET")
-                req.add_header("User-Agent", "webscan/0.1.0")
-                with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
-                    status = resp.status
-                    if status == 200:
-                        findings.append(Finding(
-                            title=f"[api_routes] Unauthenticated access: GET {path}",
-                            severity=Severity.MEDIUM,
-                            category=Category.AUTH,
-                            source=self.name,
-                            description=f"GET {path} returned 200 without authentication. Verify this endpoint should be public.",
-                            location=url,
-                            evidence=f"Status: {status}",
-                            remediation="Add authentication middleware if this endpoint should be protected",
-                            metadata={
-                                "method": "GET",
-                                "path": path,
-                                "status": status,
-                                "defined_in": file_loc,
-                            },
-                        ))
-            except urllib.error.HTTPError as e:
-                # 401/403 is expected for protected routes — that's good
-                if e.code in (401, 403):
-                    pass  # Properly protected
-                # 404/405 might mean the route isn't deployed at this URL
-            except (urllib.error.URLError, OSError):
-                pass  # Network error, skip
+            result = logged_request(url, module_name=self.name, timeout=10)
+            if result is None:
+                continue
+            status, _body, _headers = result
+            if status == 200:
+                findings.append(Finding(
+                    title=f"[api_routes] Unauthenticated access: GET {path}",
+                    severity=Severity.MEDIUM,
+                    category=Category.AUTH,
+                    source=self.name,
+                    description=f"GET {path} returned 200 without authentication. Verify this endpoint should be public.",
+                    location=url,
+                    evidence=f"Status: {status}",
+                    remediation="Add authentication middleware if this endpoint should be protected",
+                    metadata={
+                        "method": "GET",
+                        "path": path,
+                        "status": status,
+                        "defined_in": file_loc,
+                    },
+                ))
+            # 401/403 is expected for protected routes — that's good
+            # 404/405 might mean the route isn't deployed at this URL
 
         return findings
 
