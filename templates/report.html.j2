@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>webscan Report — {{ target }}</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #242836;
+    --border: #2e3348;
+    --text: #e1e4ed;
+    --text-dim: #8b8fa3;
+    --critical: #ff4d6a;
+    --high: #ff6b35;
+    --medium: #f0b429;
+    --low: #4dabf7;
+    --info: #868e96;
+    --ok: #51cf66;
+    --accent: #748ffc;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+    line-height: 1.6; padding: 2rem;
+  }
+  .container { max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
+  h2 { font-size: 1.3rem; margin: 2rem 0 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .meta { color: var(--text-dim); font-size: 0.9rem; margin-bottom: 2rem; }
+  .meta span { margin-right: 2rem; }
+
+  /* Summary cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin: 1rem 0; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 1rem; text-align: center;
+  }
+  .card .number { font-size: 2rem; font-weight: 700; }
+  .card .label { font-size: 0.8rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+  .card.critical .number { color: var(--critical); }
+  .card.high .number { color: var(--high); }
+  .card.medium .number { color: var(--medium); }
+  .card.low .number { color: var(--low); }
+  .card.info .number { color: var(--info); }
+  .card.total .number { color: var(--text); }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  th, td { padding: 0.6rem 0.8rem; text-align: left; border-bottom: 1px solid var(--border); }
+  th { background: var(--surface2); color: var(--text-dim); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  tr:hover { background: var(--surface); }
+
+  /* Severity badges */
+  .sev {
+    display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px;
+    font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+  }
+  .sev-critical { background: var(--critical); color: #fff; }
+  .sev-high { background: var(--high); color: #fff; }
+  .sev-medium { background: var(--medium); color: #1a1d27; }
+  .sev-low { background: var(--low); color: #1a1d27; }
+  .sev-info { background: var(--info); color: #fff; }
+
+  /* Status badges */
+  .status-ok { color: var(--ok); }
+  .status-fail { color: var(--critical); }
+
+  /* Coverage bar */
+  .coverage-bar {
+    background: var(--surface2); border-radius: 4px; height: 24px;
+    overflow: hidden; margin: 0.5rem 0; display: flex;
+  }
+  .coverage-bar .automated { background: var(--ok); }
+  .coverage-bar .partial { background: var(--medium); }
+  .coverage-bar .manual { background: var(--info); }
+  .coverage-bar .not-covered { background: var(--surface2); }
+
+  .coverage-legend { display: flex; gap: 1.5rem; font-size: 0.8rem; color: var(--text-dim); margin-top: 0.5rem; }
+  .coverage-legend span::before {
+    content: ''; display: inline-block; width: 12px; height: 12px; border-radius: 2px;
+    margin-right: 0.4rem; vertical-align: middle;
+  }
+  .coverage-legend .l-automated::before { background: var(--ok); }
+  .coverage-legend .l-partial::before { background: var(--medium); }
+  .coverage-legend .l-manual::before { background: var(--info); }
+  .coverage-legend .l-not-covered::before { background: var(--surface2); border: 1px solid var(--border); }
+
+  /* Finding detail */
+  .finding {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 1rem; margin: 0.5rem 0;
+  }
+  .finding-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+  .finding-title { font-weight: 600; }
+  .finding-meta { font-size: 0.85rem; color: var(--text-dim); }
+  .finding-field { margin: 0.4rem 0; }
+  .finding-field .field-label { font-size: 0.8rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.03em; }
+  .finding-field .field-value { font-size: 0.9rem; }
+  .evidence { background: var(--surface2); border-radius: 4px; padding: 0.5rem 0.8rem; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; word-break: break-all; margin-top: 0.3rem; }
+
+  /* Nav */
+  .nav { position: sticky; top: 0; background: var(--bg); padding: 0.5rem 0; margin-bottom: 1rem; border-bottom: 1px solid var(--border); z-index: 10; }
+  .nav a { margin-right: 1.5rem; font-size: 0.9rem; }
+
+  /* Checklist table */
+  .checklist-automated { color: var(--ok); }
+  .checklist-partial { color: var(--medium); }
+  .checklist-manual { color: var(--info); }
+  .checklist-not_covered { color: var(--critical); }
+
+  /* Footer */
+  .footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 0.8rem; }
+
+  @media print {
+    body { background: #fff; color: #1a1a1a; }
+    .nav { display: none; }
+    .card { border: 1px solid #ddd; }
+    .finding { border: 1px solid #ddd; page-break-inside: avoid; }
+    th { background: #f5f5f5; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="nav">
+  <a href="#summary">Summary</a>
+  <a href="#modules">Modules</a>
+  <a href="#checklist">Checklist</a>
+  <a href="#findings">Findings</a>
+  <a href="#passed">Passed</a>
+</div>
+
+<h1>webscan Security Report</h1>
+<div class="meta">
+  <span>Target: <strong>{{ target }}</strong></span>
+  <span>Date: {{ started_at }}</span>
+  <span>Duration: {{ duration }}</span>
+</div>
+
+<!-- ===== Summary ===== -->
+<h2 id="summary">Summary</h2>
+<div class="cards">
+  <div class="card total">
+    <div class="number">{{ total_findings }}</div>
+    <div class="label">Total Findings</div>
+  </div>
+  {% for sev in ["critical", "high", "medium", "low", "info"] %}
+  {% set count = by_severity.get(sev, 0) %}
+  {% if count > 0 %}
+  <div class="card {{ sev }}">
+    <div class="number">{{ count }}</div>
+    <div class="label">{{ sev | upper }} {{ "finding" if count == 1 else "findings" }}</div>
+  </div>
+  {% endif %}
+  {% endfor %}
+</div>
+
+<!-- ===== Module Results ===== -->
+<h2 id="modules">Module Results</h2>
+<table>
+  <thead>
+    <tr><th>Module</th><th>Status</th><th>Findings</th><th>Duration</th></tr>
+  </thead>
+  <tbody>
+    {% for mr in module_results %}
+    <tr>
+      <td><strong>{{ mr.module_name }}</strong></td>
+      <td>
+        {% if mr.success %}<span class="status-ok">OK</span>
+        {% else %}<span class="status-fail">FAIL</span> {{ mr.error[:60] }}{% endif %}
+      </td>
+      <td>{{ mr.findings | length }}</td>
+      <td>{{ "%.1f" | format(mr.duration_seconds) }}s</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<!-- ===== Checklist Coverage ===== -->
+{% if checklist %}
+<h2 id="checklist">Checklist Coverage</h2>
+
+<h3>Modules run in this scan</h3>
+<p style="font-size:0.9rem; color:var(--text-dim); margin-bottom:0.5rem;">
+  {% for m in checklist.modules_run %}<span class="sev sev-info" style="margin-right:0.4rem;">{{ m }}</span>{% endfor %}
+</p>
+{% if checklist.modules_not_run %}
+<h3>Modules not run</h3>
+<p style="font-size:0.9rem; color:var(--text-dim); margin-bottom:1rem;">
+  {% for m in checklist.modules_not_run %}<span class="sev" style="background:var(--surface2); margin-right:0.4rem;">{{ m }}</span>{% endfor %}
+</p>
+{% endif %}
+
+<p style="font-size:0.95rem; margin-bottom:0.5rem;">
+  <strong>{{ checklist.tested }} of {{ checklist.total_items }} checklist items tested</strong>
+  ({{ checklist.with_issues }} with issues, <span class="status-ok">{{ checklist.passed }} passed</span>)
+</p>
+<p style="font-size:0.85rem; color:var(--text-dim); margin-bottom:0.5rem;">
+  {{ checklist.automated }} fully automated + {{ checklist.partial }} partially automated.
+  {{ total_findings }} findings were raised from the items with issues.
+</p>
+<div class="coverage-bar">
+  {% set a_pct = (checklist.automated / checklist.total_items * 100) if checklist.total_items else 0 %}
+  {% set p_pct = (checklist.partial / checklist.total_items * 100) if checklist.total_items else 0 %}
+  {% set m_pct = (checklist.manual / checklist.total_items * 100) if checklist.total_items else 0 %}
+  {% set s_pct = (checklist.skipped / checklist.total_items * 100) if checklist.total_items else 0 %}
+  <div class="automated" style="width:{{ "%.1f" | format(a_pct) }}%"></div>
+  <div class="partial" style="width:{{ "%.1f" | format(p_pct) }}%"></div>
+  <div class="manual" style="width:{{ "%.1f" | format(m_pct) }}%"></div>
+</div>
+<div class="coverage-legend">
+  <span class="l-automated">Automated ({{ checklist.automated }} items)</span>
+  <span class="l-partial">Partial ({{ checklist.partial }} items)</span>
+  <span class="l-manual">Manual review ({{ checklist.manual }} items)</span>
+  <span class="l-not-covered">Skipped — run more modules ({{ checklist.skipped }} items)</span>
+</div>
+{% if checklist.no_module > 0 %}
+<p style="font-size:0.85rem; color:var(--text-dim); margin-top:0.3rem;">
+  + {{ checklist.no_module }} checklist items have no module built yet
+</p>
+{% endif %}
+
+{% if checklist.partial_items %}
+<h3>{{ checklist.partial }} checklist items with partial coverage</h3>
+<p style="font-size:0.85rem; color:var(--text-dim); margin-bottom:0.5rem;">
+  These items were tested by a module that ran, but the module only detects some aspects. Manual testing or ZAP may be needed for full coverage.
+</p>
+<table>
+  <thead>
+    <tr><th>ID</th><th>Item</th><th>Category</th><th>Sev</th><th>Covered by</th><th>Notes</th></tr>
+  </thead>
+  <tbody>
+    {% for item in checklist.partial_items %}
+    <tr>
+      <td>{{ item.id }}</td>
+      <td>{{ item.title }}</td>
+      <td>{{ item.category }}</td>
+      <td>{{ item.severity }}</td>
+      <td>{% for m in item.modules %}<span class="sev sev-info" style="margin-right:0.3rem;">{{ m }}</span>{% endfor %}</td>
+      <td style="color:var(--text-dim); font-size:0.85rem;">{{ item.notes }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if checklist.skipped_items %}
+<h3>Skipped — {{ checklist.skipped }} checklist items could be covered by running additional modules</h3>
+<p style="font-size:0.85rem; color:var(--text-dim); margin-bottom:0.5rem;">
+  These items have modules that can test them, but those modules were not included in this scan.
+</p>
+<table>
+  <thead>
+    <tr><th>ID</th><th>Item</th><th>Category</th><th>Sev</th><th>Needs modules</th></tr>
+  </thead>
+  <tbody>
+    {% for item in checklist.skipped_items %}
+    <tr>
+      <td>{{ item.id }}</td>
+      <td>{{ item.title }}</td>
+      <td>{{ item.category }}</td>
+      <td>{{ item.severity }}</td>
+      <td>{% for m in item.modules %}<span class="sev sev-low" style="margin-right:0.3rem;">{{ m }}</span>{% endfor %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if checklist.no_module_items %}
+<h3>No module available — {{ checklist.no_module }} checklist items</h3>
+<p style="font-size:0.85rem; color:var(--text-dim); margin-bottom:0.5rem;">
+  No automated tool exists for these items yet. They are planned for future development.
+</p>
+<table>
+  <thead>
+    <tr><th>ID</th><th>Item</th><th>Category</th><th>Sev</th><th>Notes</th></tr>
+  </thead>
+  <tbody>
+    {% for item in checklist.no_module_items %}
+    <tr>
+      <td>{{ item.id }}</td>
+      <td>{{ item.title }}</td>
+      <td>{{ item.category }}</td>
+      <td>{{ item.severity }}</td>
+      <td style="color:var(--text-dim); font-size:0.85rem;">{{ item.notes }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<h3>{{ checklist.manual }} checklist items requiring manual review</h3>
+<p style="font-size:0.85rem; color:var(--text-dim); margin-bottom:0.5rem;">
+  These items require human judgment or authenticated testing and cannot be fully automated.
+</p>
+<table>
+  <thead>
+    <tr><th>ID</th><th>Item</th><th>Category</th><th>Sev</th><th>Notes</th></tr>
+  </thead>
+  <tbody>
+    {% for item in checklist.manual_items %}
+    <tr>
+      <td>{{ item.id }}</td>
+      <td>{{ item.title }}</td>
+      <td>{{ item.category }}</td>
+      <td>{{ item.severity }}</td>
+      <td style="color:var(--text-dim); font-size:0.85rem;">{{ item.notes }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<!-- ===== Findings ===== -->
+<h2 id="findings">Findings ({{ total_findings }})</h2>
+<p style="font-size:0.9rem; color:var(--text-dim); margin-bottom:1rem;">
+  Generated by modules:
+  {% for mr in module_results %}
+  <span class="sev sev-info" style="margin-right:0.4rem;">{{ mr.module_name }} ({{ mr.findings | length }})</span>
+  {% endfor %}
+</p>
+
+{% for sev in ["critical", "high", "medium", "low", "info"] %}
+{% set sev_findings = findings_by_severity.get(sev, []) %}
+{% if sev_findings %}
+<h3>{{ sev | upper }} ({{ sev_findings | length }})</h3>
+{% for f in sev_findings %}
+<div class="finding">
+  <div class="finding-header">
+    <span class="finding-title">{{ f.title }}</span>
+    <span class="sev sev-{{ f.severity }}">{{ f.severity | upper }}</span>
+  </div>
+  <div class="finding-meta">Module: {{ f.source }} &middot; Category: {{ f.category }}</div>
+  <div class="finding-field">
+    <div class="field-label">Description</div>
+    <div class="field-value">{{ f.description }}</div>
+  </div>
+  <div class="finding-field">
+    <div class="field-label">Location</div>
+    <div class="field-value">{{ f.location }}</div>
+  </div>
+  {% if f.evidence %}
+  <div class="finding-field">
+    <div class="field-label">Evidence</div>
+    <div class="evidence">{{ f.evidence }}</div>
+  </div>
+  {% endif %}
+  {% if f.remediation %}
+  <div class="finding-field">
+    <div class="field-label">Remediation</div>
+    <div class="field-value">{{ f.remediation }}</div>
+  </div>
+  {% endif %}
+  {% if f.reference %}
+  <div class="finding-field">
+    <div class="field-label">Reference</div>
+    <div class="field-value"><a href="{{ f.reference }}">{{ f.reference }}</a></div>
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+<!-- ===== Passed Checks ===== -->
+{% if checklist and checklist.passed_items %}
+<h2 id="passed">Passed Checks ({{ checklist.passed }})</h2>
+<p style="font-size:0.9rem; color:var(--text-dim); margin-bottom:1rem;">
+  These checklist items were tested and no issues were found.
+</p>
+<table>
+  <thead>
+    <tr><th>ID</th><th>Status</th><th>Item</th><th>Category</th><th>Sev</th><th>Tested by</th></tr>
+  </thead>
+  <tbody>
+    {% for item in checklist.passed_items %}
+    <tr>
+      <td>{{ item.id }}</td>
+      <td><span class="status-ok">PASS</span></td>
+      <td>{{ item.title }}</td>
+      <td>{{ item.category }}</td>
+      <td>{{ item.severity }}</td>
+      <td>{% for m in item.modules %}<span class="sev sev-info" style="margin-right:0.3rem;">{{ m }}</span>{% endfor %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<div class="footer">
+  Generated by <strong>webscan</strong> v{{ version }} on {{ generated_at }}
+</div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,57 @@
+# webscan default configuration
+# Override in ~/.config/webscan/config.yaml or via CLI flags
+
+output_dir: "./webscan-results"
+output_format: "json"  # json | html | both
+
+modules:
+  testssl:
+    enabled: true
+    timeout: 600
+
+  nuclei:
+    enabled: true
+    timeout: 600
+    templates: []
+    severity: ""  # e.g. "medium,high,critical"
+
+  nikto:
+    enabled: true
+    timeout: 600
+    tuning: ""
+
+  semgrep:
+    enabled: true
+    timeout: 600
+    config: "auto"
+
+  trivy:
+    enabled: true
+    timeout: 600
+    scan_type: "fs"  # fs | image
+    image_name: ""
+
+  gitleaks:
+    enabled: true
+    timeout: 300
+
+  ffuf:
+    enabled: true
+    timeout: 600
+    wordlist: ""  # auto-detected if empty
+    threads: 40
+    extensions: ""
+
+  sqlmap:
+    enabled: false  # opt-in — potentially destructive
+    timeout: 600
+    level: 1
+    risk: 1
+    crawl: false
+    crawl_depth: 2
+
+  headers:
+    enabled: true
+
+  api_routes:
+    enabled: true

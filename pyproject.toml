@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "webscan"
+version = "0.1.0"
+description = "Web application security testing orchestrator"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.0",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+    "jinja2>=3.0",
+]
+
+[project.optional-dependencies]
+pdf = ["weasyprint>=60.0"]
+xlsx = ["openpyxl>=3.1"]
+all = ["weasyprint>=60.0", "openpyxl>=3.1"]
+dev = ["pytest>=8.0", "pytest-mock>=3.0"]
+
+[project.scripts]
+webscan = "webscan.cli:cli"
+
+[tool.setuptools.packages.find]
+include = ["webscan*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

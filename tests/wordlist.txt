@@ -1,0 +1,15 @@
+admin
+api
+backup
+login
+robots.txt
+server-status
+.env
+index
+health
+users
+search
+config
+test
+debug
+status
