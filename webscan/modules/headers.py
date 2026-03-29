@@ -5,16 +5,70 @@ and fetches well-known files (robots.txt, security.txt, crossdomain.xml).
 """
 
 import json
+import os
 import re
 import urllib.request
 import urllib.error
 import ssl
 from datetime import datetime, timezone
 from http.client import HTTPResponse
+from pathlib import Path
 
 from webscan.models import Category, Finding, Severity
 from webscan.modules.base import BaseModule
 from webscan.http_log import log_entry, logged_request
+
+
+# ---------------------------------------------------------------------------
+# Version database and comparison helpers
+# ---------------------------------------------------------------------------
+
+_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+_version_db_cache: dict | None = None
+
+
+def _load_version_db() -> dict:
+    """Load data/versions.json (cached after first call)."""
+    global _version_db_cache
+    if _version_db_cache is not None:
+        return _version_db_cache
+    path = _DATA_DIR / "versions.json"
+    if not path.exists():
+        _version_db_cache = {}
+        return _version_db_cache
+    with open(path) as f:
+        _version_db_cache = json.load(f)
+    return _version_db_cache
+
+
+def _parse_version(v: str) -> tuple[int, ...]:
+    """Parse '2.4.51' into (2, 4, 51).  Stops at the first non-numeric part."""
+    parts: list[int] = []
+    for segment in v.split("."):
+        m = re.match(r"(\d+)", segment)
+        if not m:
+            break
+        parts.append(int(m.group(1)))
+    return tuple(parts)
+
+
+def _version_lt(a: str, b: str) -> bool:
+    """Return True if version *a* is strictly less than version *b*."""
+    return _parse_version(a) < _parse_version(b)
+
+
+def _is_eol(version: str, eol_prefixes: list[str]) -> bool:
+    """Return True if *version* starts with any of the EOL prefixes."""
+    return any(version.startswith(p) for p in eol_prefixes)
+
+
+_VERIFY_NOTE = (
+    "Note: this finding is based on the webscan static version database "
+    "(last updated {db_date}). Verify against current sources — search "
+    "https://nvd.nist.gov/ or the vendor's security advisories for the "
+    "latest information. Versions may also be masked by Linux distribution "
+    "backport patching (e.g. Debian, Ubuntu)."
+)
 
 
 # Required security headers and their missing-header findings
@@ -99,12 +153,17 @@ class HeadersModule(BaseModule):
         return "built-in"
 
     def execute(self, target: str) -> list[Finding]:
+        self._page_body = ""
         headers = self._fetch_headers(target)
         self._save_raw_output(
             json.dumps({"target": target, "headers": headers}, indent=2),
             "headers-raw.json",
         )
         findings = self.parse_output(headers)
+
+        # Version / outdated-software checks
+        findings.extend(self._check_server_versions(headers, target))
+        findings.extend(self._check_client_libraries(target))
 
         # Additional checks that fetch separate URLs
         findings.extend(self._check_https_enforcement(target))
@@ -116,11 +175,12 @@ class HeadersModule(BaseModule):
         return findings
 
     def _fetch_headers(self, target: str) -> dict[str, str]:
-        """Fetch response headers from target URL."""
+        """Fetch response headers (and cache page body) from target URL."""
         result = logged_request(target, module_name=self.name)
         if result is None:
             return {}
-        _status, _body, headers = result
+        _status, body, headers = result
+        self._page_body = body
         return headers
 
     def _fetch_url(self, url: str) -> tuple[int, str, dict[str, str]] | None:
@@ -415,6 +475,244 @@ class HeadersModule(BaseModule):
                     evidence=f"{header_name}: {value.strip()}",
                     remediation=f"Remove or suppress the {header_name} header to avoid disclosing server technology",
                 ))
+
+        return findings
+
+    # -- version / outdated-software checks ---------------------------------
+
+    def _check_server_versions(
+        self, headers: dict[str, str], target: str
+    ) -> list[Finding]:
+        """Parse version strings from server headers and compare against the
+        static version database.  Flags EOL, outdated, and known-vulnerable
+        versions."""
+        db = _load_version_db()
+        server_db = db.get("server", {})
+        meta = db.get("_metadata", {})
+        db_date = meta.get("last_updated", "unknown")
+
+        findings: list[Finding] = []
+        # Combine all header values into one blob for matching
+        header_blob = "\n".join(
+            f"{k}: {v}" for k, v in headers.items()
+        )
+
+        for _key, entry in server_db.items():
+            pattern = re.compile(entry["pattern"], re.I)
+            m = pattern.search(header_blob)
+            if not m:
+                continue
+
+            # Extract the first non-None capturing group
+            version = next((g for g in m.groups() if g), None)
+            if not version:
+                continue
+
+            sw_name = entry["name"]
+            latest = entry.get("latest", "")
+            eol_prefixes = entry.get("eol", [])
+
+            # 1. EOL check
+            if _is_eol(version, eol_prefixes):
+                findings.append(Finding(
+                    title=f"{sw_name} {version} is end-of-life",
+                    severity=Severity.HIGH,
+                    category=Category.VULNERABILITY,
+                    source=self.name,
+                    description=(
+                        f"{sw_name} {version} belongs to a release branch that no "
+                        "longer receives security updates. Any future vulnerability "
+                        "will remain unpatched."
+                    ),
+                    location=target,
+                    evidence=f"Detected: {sw_name}/{version}",
+                    remediation=(
+                        f"Upgrade to a supported {sw_name} release (latest: {latest}). "
+                        + _VERIFY_NOTE.format(db_date=db_date)
+                    ),
+                ))
+                # Still check CVEs — EOL versions may have known issues too
+
+            # 2. Known-vulnerability check
+            for vuln in entry.get("vulnerabilities", []):
+                if _version_lt(version, vuln["below"]):
+                    cve_str = ", ".join(vuln["cves"]) if vuln["cves"] else "see advisory"
+                    sev_map = {
+                        "critical": Severity.CRITICAL,
+                        "high": Severity.HIGH,
+                        "medium": Severity.MEDIUM,
+                        "low": Severity.LOW,
+                    }
+                    findings.append(Finding(
+                        title=f"{sw_name} {version} has known vulnerabilities ({cve_str})",
+                        severity=sev_map.get(vuln["severity"], Severity.HIGH),
+                        category=Category.VULNERABILITY,
+                        source=self.name,
+                        description=(
+                            f"{sw_name} {version} is below {vuln['below']} and is "
+                            f"affected by: {vuln['summary']}"
+                        ),
+                        location=target,
+                        evidence=f"Detected: {sw_name}/{version} (fix available in {vuln['below']}+)",
+                        remediation=(
+                            f"Upgrade {sw_name} to at least {vuln['below']} "
+                            f"(latest: {latest}). "
+                            + _VERIFY_NOTE.format(db_date=db_date)
+                        ),
+                        reference=f"https://nvd.nist.gov/vuln/detail/{vuln['cves'][0]}" if vuln["cves"] else "",
+                        metadata={
+                            "cves": vuln["cves"],
+                            "detected_version": version,
+                            "fix_version": vuln["below"],
+                        },
+                    ))
+                    break  # report only the most severe (first match)
+
+            # 3. Outdated check (not EOL, no known CVE matched, but behind latest)
+            if latest and _version_lt(version, latest):
+                # Only emit this if we didn't already flag a CVE above
+                has_cve_finding = any(
+                    f.metadata.get("detected_version") == version
+                    for f in findings
+                    if f.metadata
+                )
+                if not has_cve_finding:
+                    findings.append(Finding(
+                        title=f"{sw_name} {version} is behind the latest release ({latest})",
+                        severity=Severity.LOW,
+                        category=Category.MISCONFIGURATION,
+                        source=self.name,
+                        description=(
+                            f"{sw_name} {version} may be missing security fixes "
+                            f"included in later releases (latest: {latest})."
+                        ),
+                        location=target,
+                        evidence=f"Detected: {sw_name}/{version}, Latest: {latest}",
+                        remediation=(
+                            f"Consider upgrading to {sw_name} {latest}. "
+                            + _VERIFY_NOTE.format(db_date=db_date)
+                        ),
+                    ))
+
+        return findings
+
+    def _check_client_libraries(self, target: str) -> list[Finding]:
+        """Scan page body for client-side JavaScript library versions and check
+        them against the static version database."""
+        db = _load_version_db()
+        client_db = db.get("client", {})
+        meta = db.get("_metadata", {})
+        db_date = meta.get("last_updated", "unknown")
+
+        body = getattr(self, "_page_body", "") or ""
+        if not body:
+            return []
+
+        findings: list[Finding] = []
+
+        for _key, entry in client_db.items():
+            detected_version = None
+            matched_where = ""
+
+            for pattern_str in entry.get("detect", []):
+                pattern = re.compile(pattern_str, re.I)
+                m = pattern.search(body)
+                if m:
+                    detected_version = m.group(1)
+                    matched_where = "page HTML/inline JS"
+                    break
+
+            if not detected_version:
+                continue
+
+            sw_name = entry["name"]
+            latest = entry.get("latest", "")
+            eol_prefixes = entry.get("eol", [])
+            eol_message = entry.get("eol_message", "")
+
+            # 1. EOL
+            if _is_eol(detected_version, eol_prefixes):
+                desc = (
+                    f"{sw_name} {detected_version} belongs to an end-of-life "
+                    "release line that no longer receives security updates."
+                )
+                if eol_message:
+                    desc += f" {eol_message}"
+
+                findings.append(Finding(
+                    title=f"{sw_name} {detected_version} is end-of-life",
+                    severity=Severity.HIGH,
+                    category=Category.VULNERABILITY,
+                    source=self.name,
+                    description=desc,
+                    location=target,
+                    evidence=f"Detected {sw_name} {detected_version} in {matched_where}",
+                    remediation=(
+                        f"Upgrade to a supported {sw_name} release (latest: {latest}). "
+                        + _VERIFY_NOTE.format(db_date=db_date)
+                    ),
+                ))
+
+            # 2. Known CVEs
+            for vuln in entry.get("vulnerabilities", []):
+                if _version_lt(detected_version, vuln["below"]):
+                    cve_str = ", ".join(vuln["cves"]) if vuln["cves"] else "see advisory"
+                    sev_map = {
+                        "critical": Severity.CRITICAL,
+                        "high": Severity.HIGH,
+                        "medium": Severity.MEDIUM,
+                        "low": Severity.LOW,
+                    }
+                    findings.append(Finding(
+                        title=f"{sw_name} {detected_version} has known vulnerabilities ({cve_str})",
+                        severity=sev_map.get(vuln["severity"], Severity.HIGH),
+                        category=Category.VULNERABILITY,
+                        source=self.name,
+                        description=(
+                            f"{sw_name} {detected_version} is below {vuln['below']} "
+                            f"and is affected by: {vuln['summary']}"
+                        ),
+                        location=target,
+                        evidence=f"Detected {sw_name} {detected_version} in {matched_where}",
+                        remediation=(
+                            f"Upgrade {sw_name} to at least {vuln['below']} "
+                            f"(latest: {latest}). "
+                            + _VERIFY_NOTE.format(db_date=db_date)
+                        ),
+                        reference=f"https://nvd.nist.gov/vuln/detail/{vuln['cves'][0]}" if vuln["cves"] else "",
+                        metadata={
+                            "cves": vuln["cves"],
+                            "detected_version": detected_version,
+                            "fix_version": vuln["below"],
+                        },
+                    ))
+                    break
+
+            # 3. Outdated (not EOL, no CVE flagged, but behind latest)
+            if latest and _version_lt(detected_version, latest):
+                has_cve_finding = any(
+                    f.metadata.get("detected_version") == detected_version
+                    and sw_name in f.title
+                    for f in findings
+                    if f.metadata
+                )
+                if not has_cve_finding:
+                    findings.append(Finding(
+                        title=f"{sw_name} {detected_version} is behind the latest release ({latest})",
+                        severity=Severity.LOW,
+                        category=Category.MISCONFIGURATION,
+                        source=self.name,
+                        description=(
+                            f"{sw_name} {detected_version} may be missing security "
+                            f"fixes from later releases (latest: {latest})."
+                        ),
+                        location=target,
+                        evidence=f"Detected {sw_name} {detected_version} in {matched_where}",
+                        remediation=(
+                            f"Consider upgrading to {sw_name} {latest}. "
+                            + _VERIFY_NOTE.format(db_date=db_date)
+                        ),
+                    ))
 
         return findings
 
