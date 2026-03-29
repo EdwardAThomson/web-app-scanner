@@ -122,6 +122,16 @@ class TestHandler(BaseHTTPRequestHandler):
     <h1>Test Application</h1>
     <p>Welcome to our application.</p>
     <!-- Internal API endpoint: http://192.168.1.50:8080/internal-api -->
+    <nav>
+        <a href="/login">Login</a>
+        <a href="/register">Register</a>
+        <a href="/profile">Profile</a>
+        <a href="/payment">Payment</a>
+        <a href="/admin">Admin</a>
+        <a href="/api/health">API Health</a>
+        <a href="/api/users">API Users</a>
+        <a href="/api/search?q=test">Search</a>
+    </nav>
     <p>For support, contact support@testcompany.com or admin@testcompany.com</p>
     <p>Backend server: 10.0.0.25</p>
     <footer>
@@ -146,6 +156,8 @@ class TestHandler(BaseHTTPRequestHandler):
     <label>Password: <input type="password" name="password"></label><br>
     <button type="submit">Login</button>
 </form>
+<p>Don't have an account? <a href="/register">Register here</a></p>
+<p><a href="/">Back to home</a></p>
 </body></html>""")
 
     # ------------------------------------------------------------------
@@ -165,6 +177,8 @@ class TestHandler(BaseHTTPRequestHandler):
     <label>Confirm: <input type="text" name="confirm_password"></label><br>
     <button type="submit">Register</button>
 </form>
+<p>Already have an account? <a href="/login">Login here</a></p>
+<p><a href="/">Back to home</a></p>
 </body></html>""")
 
     # ------------------------------------------------------------------
@@ -219,6 +233,10 @@ class TestHandler(BaseHTTPRequestHandler):
 <h1>Admin Panel</h1>
 <p>Welcome, admin!</p>
 <!-- Note: default admin credentials are admin/admin123 -->
+<a href="/server-status">Server Status</a>
+<a href="/backup">Backups</a>
+<a href="/.env">Environment</a>
+<a href="/">Back to home</a>
 </body></html>""")
 
     # ------------------------------------------------------------------

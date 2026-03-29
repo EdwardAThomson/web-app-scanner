@@ -53,6 +53,13 @@ modules:
   headers:
     enabled: true
 
+  spider:
+    enabled: true
+    max_depth: 3
+    max_pages: 50
+    request_delay: 0.2   # seconds between requests
+    respect_robots_txt: true
+
   api_routes:
     enabled: true
 

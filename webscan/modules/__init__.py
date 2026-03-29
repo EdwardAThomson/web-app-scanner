@@ -15,6 +15,7 @@ from webscan.modules.session import SessionModule
 from webscan.modules.forms import FormsModule
 from webscan.modules.deps import DepsModule
 from webscan.modules.genai import GenaiModule
+from webscan.modules.spider import SpiderModule
 
 MODULES: dict[str, type] = {
     "testssl": TestSSLModule,
@@ -32,10 +33,12 @@ MODULES: dict[str, type] = {
     "forms": FormsModule,
     "deps": DepsModule,
     "genai": GenaiModule,
+    "spider": SpiderModule,
 }
 
 # Default full-scan order (matches the guide's recommended workflow)
 DEFAULT_ORDER = [
+    "spider",
     "testssl", "gitleaks", "semgrep", "trivy", "deps",
     "headers", "disclosure", "forms", "session", "api_routes", "genai",
     "nuclei", "nikto", "ffuf", "sqlmap",
@@ -43,8 +46,9 @@ DEFAULT_ORDER = [
 
 # Modules safe to run in parallel (no interaction between them)
 PARALLEL_GROUPS = [
+    ["spider"],                                                    # Phase 0: discover pages first
     ["testssl", "gitleaks", "semgrep", "trivy", "deps", "headers",
-     "disclosure", "forms", "session", "api_routes", "genai"],    # Phase 1: independent
+     "disclosure", "forms", "session", "api_routes", "genai"],     # Phase 1: independent
     ["nuclei", "nikto"],                                           # Phase 2: remote scanning
     ["ffuf"],                                                      # Phase 3: fuzzing
     ["sqlmap"],                                                    # Phase 4: targeted

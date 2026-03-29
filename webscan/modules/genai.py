@@ -256,7 +256,7 @@ class GenaiModule(BaseModule):
         if body is None:
             return []
 
-        self._save_raw_output(body, "genai-raw.html")
+        self._save_raw_output(body, "genai-raw.txt")
 
         parser = _ChatbotHTMLParser()
         try:
