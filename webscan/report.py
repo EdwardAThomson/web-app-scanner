@@ -44,6 +44,7 @@ def write_raw_findings(scan_result: ScanResult, output_dir: str) -> str:
 def write_json_report(
     scan_result: ScanResult, output_dir: str,
     deduped_findings: list[Finding] | None = None,
+    diff_result=None,
 ) -> str:
     """Write scan results to a JSON file. Returns the file path.
 
@@ -61,6 +62,10 @@ def write_json_report(
             data["summary"]["total_findings"] - len(deduped_findings)
         )
 
+    if diff_result is not None:
+        data["diff"] = diff_result.to_dict()
+        data["diff"]["summary"] = diff_result.summary()
+
     with open(filepath, "w") as f:
         json.dump(data, f, indent=2)
 
@@ -69,7 +74,7 @@ def write_json_report(
 
 def write_html_report(
     scan_result: ScanResult, output_dir: str, checklist_summary: dict | None = None,
-    deduped_findings: list[Finding] | None = None,
+    deduped_findings: list[Finding] | None = None, diff_result=None,
 ) -> str:
     """Write an HTML report using Jinja2. Returns the file path."""
     from jinja2 import Environment, FileSystemLoader
@@ -110,6 +115,7 @@ def write_html_report(
         module_results=scan_result.module_results,
         checklist=checklist_summary,
         findings_by_severity=findings_by_severity,
+        diff=diff_result.to_dict() if diff_result else None,
         version=__version__,
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
@@ -126,7 +132,7 @@ def write_html_report(
 
 def write_markdown_report(
     scan_result: ScanResult, output_dir: str, checklist_summary: dict | None = None,
-    deduped_findings: list[Finding] | None = None,
+    deduped_findings: list[Finding] | None = None, diff_result=None,
 ) -> str:
     """Write a Markdown report. Returns the file path."""
     summary = scan_result.summary()
@@ -160,6 +166,30 @@ def write_markdown_report(
         status = "OK" if mr.success else f"FAIL ({mr.error[:40]})"
         lines.append(f"| {mr.module_name} | {status} | {len(mr.findings)} | {mr.duration_seconds:.1f}s |")
     lines.append(f"")
+
+    # Baseline diff
+    if diff_result is not None:
+        ds = diff_result.summary()
+        lines.append(f"## Baseline Diff")
+        lines.append(f"")
+        lines.append(f"| Status | Count |")
+        lines.append(f"|--------|-------|")
+        lines.append(f"| New | {ds['new']} |")
+        lines.append(f"| Fixed | {ds['fixed']} |")
+        lines.append(f"| Persistent | {ds['persistent']} |")
+        lines.append(f"")
+        if diff_result.new:
+            lines.append(f"### New Findings ({ds['new']})")
+            lines.append(f"")
+            for f in diff_result.new:
+                lines.append(f"- **[{f.severity.value.upper()}]** {f.title} @ {f.location}")
+            lines.append(f"")
+        if diff_result.fixed:
+            lines.append(f"### Fixed Findings ({ds['fixed']})")
+            lines.append(f"")
+            for f in diff_result.fixed:
+                lines.append(f"- ~~[{f.severity.value.upper()}] {f.title} @ {f.location}~~")
+            lines.append(f"")
 
     # Checklist coverage
     if checklist_summary:
@@ -234,22 +264,38 @@ def write_markdown_report(
 
 def write_csv_report(
     scan_result: ScanResult, output_dir: str,
-    deduped_findings: list[Finding] | None = None,
+    deduped_findings: list[Finding] | None = None, diff_result=None,
 ) -> str:
     """Write findings as a CSV file. Returns the file path."""
+    from webscan.dedup import _dedup_key
+
     findings_source = deduped_findings if deduped_findings is not None else scan_result.all_findings
     out_dir = ensure_output_dir(output_dir)
     filename = timestamp_filename("webscan", "csv")
     filepath = os.path.join(out_dir, filename)
 
+    # Build diff status lookup
+    diff_status: dict[tuple, str] = {}
+    if diff_result is not None:
+        for f in diff_result.new:
+            diff_status[_dedup_key(f)] = "new"
+        for f in diff_result.fixed:
+            diff_status[_dedup_key(f)] = "fixed"
+        for f in diff_result.persistent:
+            diff_status[_dedup_key(f)] = "persistent"
+
     with open(filepath, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([
+        headers = [
             "Severity", "Category", "Source", "Title",
             "Description", "Location", "Evidence", "Remediation", "Reference",
-        ])
+        ]
+        if diff_result is not None:
+            headers.append("Diff Status")
+        writer.writerow(headers)
+
         for finding in findings_source:
-            writer.writerow([
+            row = [
                 finding.severity.value,
                 finding.category.value,
                 finding.source,
@@ -259,14 +305,34 @@ def write_csv_report(
                 finding.evidence[:500],
                 finding.remediation,
                 finding.reference,
-            ])
+            ]
+            if diff_result is not None:
+                row.append(diff_status.get(_dedup_key(finding), ""))
+            writer.writerow(row)
+
+        # Append fixed findings (not in current scan)
+        if diff_result is not None:
+            for finding in diff_result.fixed:
+                row = [
+                    finding.severity.value,
+                    finding.category.value,
+                    finding.source,
+                    finding.title,
+                    finding.description,
+                    finding.location,
+                    finding.evidence[:500],
+                    finding.remediation,
+                    finding.reference,
+                    "fixed",
+                ]
+                writer.writerow(row)
 
     return filepath
 
 
 def write_pdf_report(
     scan_result: ScanResult, output_dir: str, checklist_summary: dict | None = None,
-    deduped_findings: list[Finding] | None = None,
+    deduped_findings: list[Finding] | None = None, diff_result=None,
 ) -> str:
     """Write a PDF report by rendering HTML through WeasyPrint. Returns the file path."""
     from weasyprint import HTML as WeasyprintHTML
@@ -300,6 +366,7 @@ def write_pdf_report(
         module_results=scan_result.module_results,
         checklist=checklist_summary,
         findings_by_severity=findings_by_severity,
+        diff=diff_result.to_dict() if diff_result else None,
         version=__version__,
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
@@ -315,7 +382,7 @@ def write_pdf_report(
 
 def write_xlsx_report(
     scan_result: ScanResult, output_dir: str,
-    deduped_findings: list[Finding] | None = None,
+    deduped_findings: list[Finding] | None = None, diff_result=None,
 ) -> str:
     """Write findings as an Excel spreadsheet. Returns the file path."""
     from openpyxl import Workbook
@@ -400,6 +467,43 @@ def write_xlsx_report(
                        ("E", 60), ("F", 40), ("G", 40), ("H", 50), ("I", 30)]:
         ws_findings.column_dimensions[col].width = width
 
+    # --- Diff sheet (only when baseline comparison was performed) ---
+    if diff_result is not None:
+        ws_diff = wb.create_sheet("Diff")
+        diff_headers = ["Status", "Severity", "Title", "Location", "Source"]
+        ws_diff.append(diff_headers)
+        for cell in ws_diff[1]:
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill(start_color="2E3348", end_color="2E3348", fill_type="solid")
+            cell.font = Font(bold=True, color="FFFFFF")
+
+        status_colors = {
+            "NEW": "FF4D6A",
+            "FIXED": "40C057",
+            "PERSISTENT": "868E96",
+        }
+        for status_label, finding_list in [
+            ("NEW", diff_result.new),
+            ("FIXED", diff_result.fixed),
+            ("PERSISTENT", diff_result.persistent),
+        ]:
+            for f in finding_list:
+                ws_diff.append([
+                    status_label,
+                    f.severity.value.upper(),
+                    f.title,
+                    f.location,
+                    f.source,
+                ])
+                row = ws_diff.max_row
+                color = status_colors[status_label]
+                ws_diff[f"A{row}"].fill = PatternFill(
+                    start_color=color, end_color=color, fill_type="solid"
+                )
+
+        for col, width in [("A", 14), ("B", 12), ("C", 50), ("D", 40), ("E", 20)]:
+            ws_diff.column_dimensions[col].width = width
+
     out_dir = ensure_output_dir(output_dir)
     filename = timestamp_filename("webscan", "xlsx")
     filepath = os.path.join(out_dir, filename)
@@ -414,6 +518,7 @@ def write_reports(
     formats: list[str],
     checklist_summary: dict | None = None,
     deduped_findings: list[Finding] | None = None,
+    diff_result=None,
 ) -> dict[str, str]:
     """Write reports in the requested formats. Returns {format: filepath}.
 
@@ -426,23 +531,23 @@ def write_reports(
     # Flat list of all raw findings (before dedup)
     paths["raw"] = write_raw_findings(scan_result, output_dir)
 
-    # JSON: raw module_results + deduped top-level section
-    paths["json"] = write_json_report(scan_result, output_dir, deduped_findings)
+    # JSON: raw module_results + deduped top-level section + diff
+    paths["json"] = write_json_report(scan_result, output_dir, deduped_findings, diff_result)
 
-    # All other formats use deduped findings
-    paths["html"] = write_html_report(scan_result, output_dir, checklist_summary, deduped_findings)
+    # All other formats use deduped findings + optional diff
+    paths["html"] = write_html_report(scan_result, output_dir, checklist_summary, deduped_findings, diff_result)
 
     if "md" in formats or "markdown" in formats:
-        paths["md"] = write_markdown_report(scan_result, output_dir, checklist_summary, deduped_findings)
+        paths["md"] = write_markdown_report(scan_result, output_dir, checklist_summary, deduped_findings, diff_result)
 
     if "csv" in formats:
-        paths["csv"] = write_csv_report(scan_result, output_dir, deduped_findings)
+        paths["csv"] = write_csv_report(scan_result, output_dir, deduped_findings, diff_result)
 
     if "pdf" in formats:
-        paths["pdf"] = write_pdf_report(scan_result, output_dir, checklist_summary, deduped_findings)
+        paths["pdf"] = write_pdf_report(scan_result, output_dir, checklist_summary, deduped_findings, diff_result)
 
     if "xlsx" in formats or "xls" in formats or "excel" in formats:
-        paths["xlsx"] = write_xlsx_report(scan_result, output_dir, deduped_findings)
+        paths["xlsx"] = write_xlsx_report(scan_result, output_dir, deduped_findings, diff_result)
 
     return paths
 

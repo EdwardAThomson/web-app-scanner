@@ -57,6 +57,22 @@ class Finding:
         d["category"] = self.category.value
         return d
 
+    @classmethod
+    def from_dict(cls, d: dict) -> "Finding":
+        """Reconstruct a Finding from a serialised dict (e.g. JSON report)."""
+        return cls(
+            title=d["title"],
+            severity=Severity(d["severity"]),
+            category=Category(d["category"]),
+            source=d.get("source", ""),
+            description=d.get("description", ""),
+            location=d.get("location", ""),
+            evidence=d.get("evidence", ""),
+            remediation=d.get("remediation", ""),
+            reference=d.get("reference", ""),
+            metadata=d.get("metadata", {}),
+        )
+
 
 @dataclass
 class ModuleResult:

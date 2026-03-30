@@ -127,7 +127,9 @@ def install(tools, force):
 @click.option("--serial", is_flag=True, help="Force sequential execution")
 @click.option("--fail-on", type=click.Choice(["critical", "high", "medium", "low", "info"], case_sensitive=False),
               default=None, help="Exit with code 1 if findings at or above this severity exist (for CI)")
-def run(modules, target, source_path, output_dir, formats, config_file, skip, serial, fail_on):
+@click.option("--diff", "baseline_path", default=None, type=click.Path(exists=True),
+              help="Path to a previous webscan JSON report to diff against")
+def run(modules, target, source_path, output_dir, formats, config_file, skip, serial, fail_on, baseline_path):
     """Run scan modules. Use 'all' for full scan.
 
     Examples:
@@ -225,6 +227,26 @@ def run(modules, target, source_path, output_dir, formats, config_file, skip, se
     if removed > 0:
         console.print(f"[dim]Deduplication: {raw_count} raw findings → {deduped_count} unique ({removed} duplicates merged)[/dim]")
 
+    # Baseline diff (if requested)
+    diff_result = None
+    if baseline_path:
+        from webscan.diff import load_baseline, compute_diff
+        baseline_findings = load_baseline(baseline_path)
+        diff_result = compute_diff(baseline_findings, deduped_findings)
+        ds = diff_result.summary()
+        console.print(f"\n[bold]Baseline diff[/bold] (vs {baseline_path}):")
+        console.print(f"  [bold green]+{ds['new']} new[/bold green]  "
+                      f"[bold red]-{ds['fixed']} fixed[/bold red]  "
+                      f"[dim]{ds['persistent']} persistent[/dim]")
+        if diff_result.new:
+            console.print(f"\n[bold]New findings:[/bold]")
+            for f in diff_result.new:
+                console.print(f"  [red]+[/red] [{f.severity.value.upper()}] {f.title}")
+        if diff_result.fixed:
+            console.print(f"\n[bold green]Fixed:[/bold green]")
+            for f in diff_result.fixed:
+                console.print(f"  [green]-[/green] [{f.severity.value.upper()}] {f.title}")
+
     # Checklist coverage — pass finding titles so we can match against specific checklist items
     modules_run = [name for name, _ in module_targets]
     finding_titles = [f.title for f in scan_result.all_findings]
@@ -235,7 +257,7 @@ def run(modules, target, source_path, output_dir, formats, config_file, skip, se
 
     # Write reports inside the scan directory
     report_paths = write_reports(scan_result, scan_dir, list(formats), checklist_summary,
-                                 deduped_findings=deduped_findings)
+                                 deduped_findings=deduped_findings, diff_result=diff_result)
 
     console.print()
     console.print(f"[bold green]Scan directory:[/bold green] {scan_dir}")

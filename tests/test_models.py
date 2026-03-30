@@ -124,6 +124,27 @@ class TestScanResult:
         assert s["modules_run"] == 0
 
 
+class TestFindingFromDict:
+    def test_round_trip(self):
+        f = _make_finding(evidence="ev", reference="ref", metadata={"key": "val"})
+        d = f.to_dict()
+        restored = Finding.from_dict(d)
+        assert restored.title == f.title
+        assert restored.severity == f.severity
+        assert restored.category == f.category
+        assert restored.evidence == "ev"
+        assert restored.reference == "ref"
+        assert restored.metadata == {"key": "val"}
+
+    def test_missing_optional_fields(self):
+        d = {"title": "Test", "severity": "high", "category": "header",
+             "source": "test", "description": "desc", "location": "/"}
+        f = Finding.from_dict(d)
+        assert f.evidence == ""
+        assert f.remediation == ""
+        assert f.metadata == {}
+
+
 class TestSeverityRank:
     def test_ordering(self):
         assert Severity.rank(Severity.CRITICAL) > Severity.rank(Severity.HIGH)
