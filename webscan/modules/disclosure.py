@@ -8,6 +8,7 @@ Fetches web pages and checks for information leakage:
 - Subresource Integrity (SRI) missing on CDN script/link tags
 """
 
+import os
 import re
 import urllib.request
 import urllib.error
@@ -108,10 +109,23 @@ class _HTMLAnalyzer(HTMLParser):
         return url.startswith("http://") or url.startswith("https://") or url.startswith("//")
 
 
+SKIP_DIRS = {
+    "node_modules", ".git", "__pycache__", "venv", ".venv",
+    "dist", "build", ".next", ".nuxt",
+}
+SOURCE_EXTENSIONS = {
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".mjs", ".rb", ".go",
+    ".java", ".php", ".json", ".yaml", ".yml", ".toml",
+    ".env", ".cfg", ".ini", ".conf",
+}
+MAX_SOURCE_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
+
+
 class DisclosureModule(BaseModule):
     name = "disclosure"
     tool_binary = ""
     description = "Information disclosure detection (HTML comments, emails, IPs, SRI)"
+    target_type = "both"
 
     def check_installed(self) -> tuple[bool, str]:
         return True, "built-in"
@@ -120,20 +134,24 @@ class DisclosureModule(BaseModule):
         return "built-in"
 
     def execute(self, target: str) -> list[Finding]:
-        body, headers = self._fetch_page(target)
-        if body is None:
-            return []
+        source_path = self.config.get("source_path", "")
+        target_url = self.config.get("target", "")
+        findings: list[Finding] = []
 
-        self._save_raw_output(body, "disclosure-raw.txt")
-        findings = self.parse_output(body, target, headers)
+        if source_path and os.path.isdir(source_path):
+            findings.extend(self._scan_source_files(source_path))
 
-        # Also scan linked JS files for API keys
-        analyzer = _HTMLAnalyzer()
-        try:
-            analyzer.feed(body)
-        except Exception:
-            pass
-        findings.extend(self._scan_js_files(analyzer, target))
+        if target_url:
+            body, headers = self._fetch_page(target_url)
+            if body is not None:
+                self._save_raw_output(body, "disclosure-raw.txt")
+                findings.extend(self.parse_output(body, target_url, headers))
+                analyzer = _HTMLAnalyzer()
+                try:
+                    analyzer.feed(body)
+                except Exception:
+                    pass
+                findings.extend(self._scan_js_files(analyzer, target_url))
 
         return findings
 
@@ -362,8 +380,6 @@ class DisclosureModule(BaseModule):
         script_urls = set()
         for script in analyzer.scripts_without_sri:
             script_urls.add(script["src"])
-        # Also check the full page for any script src we may have missed
-        # (scripts_without_sri only has external ones without integrity)
 
         # Limit to 10 JS files to avoid excessive requests
         for src in list(script_urls)[:10]:
@@ -381,4 +397,35 @@ class DisclosureModule(BaseModule):
                 if len(js_content) > 0:
                     findings.extend(self._check_api_keys(js_content, url, f"JavaScript file ({src})"))
 
+        return findings
+
+    # -- source-code scanning -----------------------------------------------
+
+    def _scan_source_files(self, source_path: str) -> list[Finding]:
+        """Scan local source files for information disclosure issues."""
+        findings: list[Finding] = []
+        for dirpath, dirnames, filenames in os.walk(source_path):
+            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+            for filename in filenames:
+                ext = os.path.splitext(filename)[1].lower()
+                if ext not in SOURCE_EXTENSIONS:
+                    continue
+                filepath = os.path.join(dirpath, filename)
+                try:
+                    if os.path.getsize(filepath) > MAX_SOURCE_FILE_SIZE:
+                        continue
+                    with open(filepath, "r", errors="ignore") as f:
+                        content = f.read()
+                except OSError:
+                    continue
+                rel_path = os.path.relpath(filepath, source_path)
+                findings.extend(self._check_api_keys(
+                    content, rel_path, f"source file ({rel_path})"))
+                findings.extend(self._check_emails(content, rel_path))
+                findings.extend(self._check_internal_ips(content, {}, rel_path))
+
+        self._save_raw_output(
+            f"Scanned source in {source_path}\nFindings: {len(findings)}",
+            "disclosure-source-raw.txt",
+        )
         return findings

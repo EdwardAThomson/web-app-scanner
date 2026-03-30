@@ -13,6 +13,17 @@ class Severity(str, Enum):
     LOW = "low"
     INFO = "info"
 
+    @staticmethod
+    def rank(sev: "Severity") -> int:
+        """Return numeric rank (higher = more severe)."""
+        return {
+            Severity.INFO: 0,
+            Severity.LOW: 1,
+            Severity.MEDIUM: 2,
+            Severity.HIGH: 3,
+            Severity.CRITICAL: 4,
+        }[sev]
+
 
 class Category(str, Enum):
     TLS = "tls"
@@ -75,7 +86,6 @@ class ScanResult:
     started_at: datetime = field(default_factory=datetime.now)
     finished_at: Optional[datetime] = None
     module_results: list[ModuleResult] = field(default_factory=list)
-
     @property
     def all_findings(self) -> list[Finding]:
         findings = []

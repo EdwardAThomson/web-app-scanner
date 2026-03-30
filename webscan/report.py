@@ -19,7 +19,7 @@ from rich.console import Console
 from rich.table import Table
 
 from webscan import __version__
-from webscan.models import ScanResult
+from webscan.models import Finding, ScanResult
 from webscan.utils import ensure_output_dir, timestamp_filename
 
 console = Console()
@@ -27,20 +27,49 @@ console = Console()
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 
 
-def write_json_report(scan_result: ScanResult, output_dir: str) -> str:
-    """Write scan results to a JSON file. Returns the file path."""
+def write_raw_findings(scan_result: ScanResult, output_dir: str) -> str:
+    """Write a flat JSON array of every finding from every module.
+
+    This is the complete, unprocessed list before deduplication.
+    """
+    out_dir = ensure_output_dir(output_dir)
+    filepath = os.path.join(out_dir, "findings-raw.json")
+
+    with open(filepath, "w") as f:
+        json.dump([f.to_dict() for f in scan_result.all_findings], f, indent=2)
+
+    return filepath
+
+
+def write_json_report(
+    scan_result: ScanResult, output_dir: str,
+    deduped_findings: list[Finding] | None = None,
+) -> str:
+    """Write scan results to a JSON file. Returns the file path.
+
+    Includes raw per-module findings and a top-level deduped section.
+    """
     out_dir = ensure_output_dir(output_dir)
     filename = timestamp_filename("webscan", "json")
     filepath = os.path.join(out_dir, filename)
 
+    data = scan_result.to_dict()
+    if deduped_findings is not None:
+        data["deduped_findings"] = [f.to_dict() for f in deduped_findings]
+        data["summary"]["unique_findings"] = len(deduped_findings)
+        data["summary"]["duplicates_merged"] = (
+            data["summary"]["total_findings"] - len(deduped_findings)
+        )
+
     with open(filepath, "w") as f:
-        json.dump(scan_result.to_dict(), f, indent=2)
+        json.dump(data, f, indent=2)
 
     return filepath
 
 
 def write_html_report(
-    scan_result: ScanResult, output_dir: str, checklist_summary: dict | None = None
+    scan_result: ScanResult, output_dir: str, checklist_summary: dict | None = None,
+    deduped_findings: list[Finding] | None = None,
 ) -> str:
     """Write an HTML report using Jinja2. Returns the file path."""
     from jinja2 import Environment, FileSystemLoader
@@ -51,9 +80,12 @@ def write_html_report(
     )
     template = env.get_template("report.html.j2")
 
+    # Use deduped findings for the report if available
+    findings_source = deduped_findings if deduped_findings is not None else scan_result.all_findings
+
     # Prepare template data
     summary = scan_result.summary()
-    all_findings = [f.to_dict() for f in scan_result.all_findings]
+    all_findings = [f.to_dict() for f in findings_source]
 
     # Group findings by severity
     findings_by_severity = {}
@@ -93,10 +125,12 @@ def write_html_report(
 
 
 def write_markdown_report(
-    scan_result: ScanResult, output_dir: str, checklist_summary: dict | None = None
+    scan_result: ScanResult, output_dir: str, checklist_summary: dict | None = None,
+    deduped_findings: list[Finding] | None = None,
 ) -> str:
     """Write a Markdown report. Returns the file path."""
     summary = scan_result.summary()
+    findings_source = deduped_findings if deduped_findings is not None else scan_result.all_findings
     lines = []
 
     lines.append(f"# webscan Security Report")
@@ -166,7 +200,7 @@ def write_markdown_report(
     lines.append(f"## Findings")
     lines.append(f"")
     for sev in ["critical", "high", "medium", "low", "info"]:
-        sev_findings = [f for f in scan_result.all_findings if f.severity.value == sev]
+        sev_findings = [f for f in findings_source if f.severity.value == sev]
         if not sev_findings:
             continue
         lines.append(f"### {sev.upper()} ({len(sev_findings)})")
@@ -198,8 +232,12 @@ def write_markdown_report(
     return filepath
 
 
-def write_csv_report(scan_result: ScanResult, output_dir: str) -> str:
+def write_csv_report(
+    scan_result: ScanResult, output_dir: str,
+    deduped_findings: list[Finding] | None = None,
+) -> str:
     """Write findings as a CSV file. Returns the file path."""
+    findings_source = deduped_findings if deduped_findings is not None else scan_result.all_findings
     out_dir = ensure_output_dir(output_dir)
     filename = timestamp_filename("webscan", "csv")
     filepath = os.path.join(out_dir, filename)
@@ -210,7 +248,7 @@ def write_csv_report(scan_result: ScanResult, output_dir: str) -> str:
             "Severity", "Category", "Source", "Title",
             "Description", "Location", "Evidence", "Remediation", "Reference",
         ])
-        for finding in scan_result.all_findings:
+        for finding in findings_source:
             writer.writerow([
                 finding.severity.value,
                 finding.category.value,
@@ -227,7 +265,8 @@ def write_csv_report(scan_result: ScanResult, output_dir: str) -> str:
 
 
 def write_pdf_report(
-    scan_result: ScanResult, output_dir: str, checklist_summary: dict | None = None
+    scan_result: ScanResult, output_dir: str, checklist_summary: dict | None = None,
+    deduped_findings: list[Finding] | None = None,
 ) -> str:
     """Write a PDF report by rendering HTML through WeasyPrint. Returns the file path."""
     from weasyprint import HTML as WeasyprintHTML
@@ -238,8 +277,9 @@ def write_pdf_report(
     env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)), autoescape=True)
     template = env.get_template("report.html.j2")
 
+    findings_source = deduped_findings if deduped_findings is not None else scan_result.all_findings
     summary = scan_result.summary()
-    all_findings = [f.to_dict() for f in scan_result.all_findings]
+    all_findings = [f.to_dict() for f in findings_source]
     findings_by_severity = {}
     for f in all_findings:
         findings_by_severity.setdefault(f["severity"], []).append(f)
@@ -273,7 +313,10 @@ def write_pdf_report(
     return filepath
 
 
-def write_xlsx_report(scan_result: ScanResult, output_dir: str) -> str:
+def write_xlsx_report(
+    scan_result: ScanResult, output_dir: str,
+    deduped_findings: list[Finding] | None = None,
+) -> str:
     """Write findings as an Excel spreadsheet. Returns the file path."""
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
@@ -331,7 +374,8 @@ def write_xlsx_report(scan_result: ScanResult, output_dir: str) -> str:
         cell.fill = PatternFill(start_color="2E3348", end_color="2E3348", fill_type="solid")
         cell.font = Font(bold=True, color="FFFFFF")
 
-    for finding in scan_result.all_findings:
+    findings_source = deduped_findings if deduped_findings is not None else scan_result.all_findings
+    for finding in findings_source:
         ws_findings.append([
             finding.severity.value.upper(),
             finding.category.value,
@@ -369,25 +413,36 @@ def write_reports(
     output_dir: str,
     formats: list[str],
     checklist_summary: dict | None = None,
+    deduped_findings: list[Finding] | None = None,
 ) -> dict[str, str]:
-    """Write reports in the requested formats. Returns {format: filepath}."""
+    """Write reports in the requested formats. Returns {format: filepath}.
+
+    The JSON report includes both raw per-module findings and the deduped
+    canonical list.  All other report formats use the deduped list so
+    that human-readable output is concise and free of duplicates.
+    """
     paths = {}
 
-    # JSON and HTML are always written
-    paths["json"] = write_json_report(scan_result, output_dir)
-    paths["html"] = write_html_report(scan_result, output_dir, checklist_summary)
+    # Flat list of all raw findings (before dedup)
+    paths["raw"] = write_raw_findings(scan_result, output_dir)
+
+    # JSON: raw module_results + deduped top-level section
+    paths["json"] = write_json_report(scan_result, output_dir, deduped_findings)
+
+    # All other formats use deduped findings
+    paths["html"] = write_html_report(scan_result, output_dir, checklist_summary, deduped_findings)
 
     if "md" in formats or "markdown" in formats:
-        paths["md"] = write_markdown_report(scan_result, output_dir, checklist_summary)
+        paths["md"] = write_markdown_report(scan_result, output_dir, checklist_summary, deduped_findings)
 
     if "csv" in formats:
-        paths["csv"] = write_csv_report(scan_result, output_dir)
+        paths["csv"] = write_csv_report(scan_result, output_dir, deduped_findings)
 
     if "pdf" in formats:
-        paths["pdf"] = write_pdf_report(scan_result, output_dir, checklist_summary)
+        paths["pdf"] = write_pdf_report(scan_result, output_dir, checklist_summary, deduped_findings)
 
     if "xlsx" in formats or "xls" in formats or "excel" in formats:
-        paths["xlsx"] = write_xlsx_report(scan_result, output_dir)
+        paths["xlsx"] = write_xlsx_report(scan_result, output_dir, deduped_findings)
 
     return paths
 

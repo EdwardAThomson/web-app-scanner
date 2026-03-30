@@ -210,6 +210,13 @@ class TestGenAIJSDetection:
         labels = [d["label"] for d in detections]
         assert "Hugging Face" in labels
 
+    def test_xai_grok_client(self):
+        module = _make_module()
+        js = 'const client = new XaiClient({apiKey: key, baseURL: "https://api.x.ai/v1"});'
+        detections = module._detect_genai_in_js(js, "https://example.com", "inline")
+        labels = [d["label"] for d in detections]
+        assert "xAI Grok" in labels
+
     def test_no_genai_in_clean_js(self):
         module = _make_module()
         js = 'function add(a, b) { return a + b; }'
@@ -286,6 +293,14 @@ class TestAIAPIKeys:
         findings = module._check_ai_api_keys(js, "https://example.com")
         key_findings = [f for f in findings if "Groq" in f.title]
         assert len(key_findings) == 1
+
+    def test_xai_key(self):
+        module = _make_module()
+        js = 'const key = "xai-' + "a" * 20 + '";'
+        findings = module._check_ai_api_keys(js, "https://example.com")
+        key_findings = [f for f in findings if "xAI" in f.title]
+        assert len(key_findings) == 1
+        assert key_findings[0].severity == Severity.CRITICAL
 
     def test_redaction(self):
         module = _make_module()
@@ -660,3 +675,163 @@ class TestModuleMetadata:
     def test_version(self):
         module = _make_module()
         assert module.get_version() == "built-in"
+
+    def test_target_type_is_both(self):
+        assert GenaiModule.target_type == "both"
+
+
+# ---------------------------------------------------------------------------
+# Source-code scanning
+# ---------------------------------------------------------------------------
+
+
+class TestSourceImportDetection:
+    def test_python_openai_import(self):
+        module = _make_module()
+        content = "import openai\nclient = openai.OpenAI()\n"
+        detections = module._detect_source_imports("app.py", content)
+        labels = [d["label"] for d in detections]
+        assert "OpenAI" in labels
+
+    def test_python_from_anthropic(self):
+        module = _make_module()
+        content = "from anthropic import Anthropic\n"
+        detections = module._detect_source_imports("chat.py", content)
+        labels = [d["label"] for d in detections]
+        assert "Anthropic" in labels
+
+    def test_python_langchain(self):
+        module = _make_module()
+        content = "from langchain.chat_models import ChatOpenAI\n"
+        detections = module._detect_source_imports("chain.py", content)
+        labels = [d["label"] for d in detections]
+        assert "LangChain" in labels
+
+    def test_python_google_genai(self):
+        module = _make_module()
+        content = "import google.generativeai as genai\n"
+        detections = module._detect_source_imports("gen.py", content)
+        labels = [d["label"] for d in detections]
+        assert "Google Generative AI" in labels
+
+    def test_js_openai_import(self):
+        module = _make_module()
+        content = 'import OpenAI from "openai";\n'
+        detections = module._detect_source_imports("app.ts", content)
+        labels = [d["label"] for d in detections]
+        assert "OpenAI" in labels
+
+    def test_js_anthropic_require(self):
+        module = _make_module()
+        content = 'const Anthropic = require("@anthropic-ai/sdk");\n'
+        detections = module._detect_source_imports("bot.js", content)
+        labels = [d["label"] for d in detections]
+        assert "Anthropic" in labels
+
+    def test_js_vercel_ai_sdk(self):
+        module = _make_module()
+        content = 'import { useChat } from "ai/react";\n'
+        detections = module._detect_source_imports("Chat.tsx", content)
+        labels = [d["label"] for d in detections]
+        assert "Vercel AI SDK" in labels
+
+    def test_no_imports_in_clean_file(self):
+        module = _make_module()
+        content = "def add(a, b):\n    return a + b\n"
+        detections = module._detect_source_imports("utils.py", content)
+        assert len(detections) == 0
+
+    def test_includes_file_location(self):
+        module = _make_module()
+        content = "# setup\nimport openai\n"
+        detections = module._detect_source_imports("app.py", content)
+        assert "app.py:2" in detections[0]["source"]
+
+    def test_ignores_non_source_extensions(self):
+        module = _make_module()
+        content = "import openai\n"
+        detections = module._detect_source_imports("readme.md", content)
+        assert len(detections) == 0
+
+
+class TestSourceAPIKeys:
+    def test_anthropic_key_in_source(self):
+        module = _make_module()
+        content = 'API_KEY = "sk-ant-abcdefghijklmnopqrstuvwxyz123456789a"\n'
+        findings = module._check_source_api_keys(content, "config.py")
+        assert len(findings) == 1
+        assert "Anthropic" in findings[0].title
+        assert "source code" in findings[0].title
+        assert findings[0].category == Category.SECRET
+
+    def test_location_includes_file_and_line(self):
+        module = _make_module()
+        content = '# config\nAPI_KEY = "sk-ant-abcdefghijklmnopqrstuvwxyz123456789a"\n'
+        findings = module._check_source_api_keys(content, "config.py")
+        assert findings[0].location == "config.py:2"
+
+    def test_key_is_redacted(self):
+        module = _make_module()
+        key = "sk-ant-abcdefghijklmnopqrstuvwxyz123456789a"
+        content = f'KEY = "{key}"\n'
+        findings = module._check_source_api_keys(content, "app.py")
+        assert key not in findings[0].evidence
+        assert "Redacted" in findings[0].evidence
+
+    def test_no_keys_clean_source(self):
+        module = _make_module()
+        content = "def main():\n    print('hello')\n"
+        findings = module._check_source_api_keys(content, "app.py")
+        assert len(findings) == 0
+
+
+class TestFullSourceScan:
+    def test_scan_detects_imports_and_keys(self, tmp_path):
+        py_file = tmp_path / "app.py"
+        py_file.write_text(
+            'import openai\n'
+            'client = openai.OpenAI(api_key="sk-proj-' + "a" * 40 + '")\n'
+        )
+        module = GenaiModule({"source_path": str(tmp_path), "scan_dir": str(tmp_path)})
+        findings = module._scan_source(str(tmp_path))
+        titles = [f.title for f in findings]
+        assert any("GenAI" in t for t in titles)
+        assert any("source code" in t for t in titles)
+
+    def test_scan_skips_node_modules(self, tmp_path):
+        nm = tmp_path / "node_modules" / "openai"
+        nm.mkdir(parents=True)
+        (nm / "index.js").write_text('import OpenAI from "openai";')
+        module = GenaiModule({"source_path": str(tmp_path), "scan_dir": str(tmp_path)})
+        findings = module._scan_source(str(tmp_path))
+        assert len(findings) == 0
+
+    def test_scan_detects_system_prompts(self, tmp_path):
+        py_file = tmp_path / "bot.py"
+        py_file.write_text('system_prompt = "You are a helpful assistant"\n')
+        module = GenaiModule({"source_path": str(tmp_path), "scan_dir": str(tmp_path)})
+        findings = module._scan_source(str(tmp_path))
+        assert any("System prompt" in f.title for f in findings)
+
+    def test_scan_detects_model_names(self, tmp_path):
+        py_file = tmp_path / "config.py"
+        py_file.write_text('MODEL = "gpt-4-turbo"\n')
+        module = GenaiModule({"source_path": str(tmp_path), "scan_dir": str(tmp_path)})
+        findings = module._scan_source(str(tmp_path))
+        assert any("model name" in f.title.lower() for f in findings)
+
+    def test_scan_empty_dir(self, tmp_path):
+        module = GenaiModule({"source_path": str(tmp_path), "scan_dir": str(tmp_path)})
+        findings = module._scan_source(str(tmp_path))
+        assert len(findings) == 0
+
+    def test_execute_dispatches_to_source(self, tmp_path):
+        py_file = tmp_path / "app.py"
+        py_file.write_text("import openai\n")
+        module = GenaiModule({
+            "source_path": str(tmp_path),
+            "target": "",
+            "scan_dir": str(tmp_path),
+        })
+        findings = module.execute(str(tmp_path))
+        assert any("GenAI" in f.title for f in findings)

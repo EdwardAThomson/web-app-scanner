@@ -1,12 +1,16 @@
 """CLI entry point for webscan."""
 
+import sys
+
 import click
 from rich.console import Console
 from rich.table import Table
 
 from webscan.checklist import get_coverage_summary
 from webscan.config import build_config
+from webscan.dedup import deduplicate
 from webscan.http_log import init_log, close_log
+from webscan.models import Severity
 from webscan.modules import DEFAULT_ORDER, MODULES
 from webscan.report import print_summary, write_reports
 from webscan.runner import run_scan
@@ -121,7 +125,9 @@ def install(tools, force):
 @click.option("-c", "--config", "config_file", required=False, help="Path to config YAML file")
 @click.option("--skip", multiple=True, help="Modules to skip (can be repeated)")
 @click.option("--serial", is_flag=True, help="Force sequential execution")
-def run(modules, target, source_path, output_dir, formats, config_file, skip, serial):
+@click.option("--fail-on", type=click.Choice(["critical", "high", "medium", "low", "info"], case_sensitive=False),
+              default=None, help="Exit with code 1 if findings at or above this severity exist (for CI)")
+def run(modules, target, source_path, output_dir, formats, config_file, skip, serial, fail_on):
     """Run scan modules. Use 'all' for full scan.
 
     Examples:
@@ -208,8 +214,16 @@ def run(modules, target, source_path, output_dir, formats, config_file, skip, se
     # Close HTTP log
     close_log()
 
-    # Print summary
+    # Print summary (raw counts)
     print_summary(scan_result)
+
+    # Cross-module deduplication for reports
+    raw_count = len(scan_result.all_findings)
+    deduped_findings = deduplicate(scan_result.all_findings)
+    deduped_count = len(deduped_findings)
+    removed = raw_count - deduped_count
+    if removed > 0:
+        console.print(f"[dim]Deduplication: {raw_count} raw findings → {deduped_count} unique ({removed} duplicates merged)[/dim]")
 
     # Checklist coverage — pass finding titles so we can match against specific checklist items
     modules_run = [name for name, _ in module_targets]
@@ -220,7 +234,8 @@ def run(modules, target, source_path, output_dir, formats, config_file, skip, se
                   f"of {checklist_summary['total_items']} total")
 
     # Write reports inside the scan directory
-    report_paths = write_reports(scan_result, scan_dir, list(formats), checklist_summary)
+    report_paths = write_reports(scan_result, scan_dir, list(formats), checklist_summary,
+                                 deduped_findings=deduped_findings)
 
     console.print()
     console.print(f"[bold green]Scan directory:[/bold green] {scan_dir}")
@@ -228,6 +243,21 @@ def run(modules, target, source_path, output_dir, formats, config_file, skip, se
         console.print(f"  {fmt.upper()} report: {path}")
     console.print(f"  HTTP log: {http_log_readable}")
     console.print(f"  HTTP log (JSONL): {http_log_path}")
+
+    # Severity-based exit codes for CI pipelines
+    if fail_on:
+        threshold = Severity(fail_on.lower())
+        threshold_rank = Severity.rank(threshold)
+        worst = max(
+            (Severity.rank(f.severity) for f in scan_result.all_findings),
+            default=-1,
+        )
+        if worst >= threshold_rank:
+            console.print(
+                f"\n[bold red]FAIL:[/bold red] findings at or above "
+                f"'{threshold.value}' severity detected (exit code 1)"
+            )
+            sys.exit(1)
 
 
 def main():

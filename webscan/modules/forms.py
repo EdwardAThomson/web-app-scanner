@@ -8,6 +8,7 @@ Fetches web pages and analyzes HTML forms for:
 - Credentials sent via GET method
 """
 
+import os
 from html.parser import HTMLParser
 
 from webscan.models import Category, Finding, Severity
@@ -79,10 +80,22 @@ class _FormParser(HTMLParser):
             self._current_form = None
 
 
+SKIP_DIRS = {
+    "node_modules", ".git", "__pycache__", "venv", ".venv",
+    "dist", "build", ".next", ".nuxt",
+}
+TEMPLATE_EXTENSIONS = {
+    ".html", ".htm", ".jsx", ".tsx", ".vue", ".svelte",
+    ".ejs", ".hbs", ".handlebars", ".jinja", ".jinja2",
+    ".j2", ".twig", ".erb", ".mustache",
+}
+
+
 class FormsModule(BaseModule):
     name = "forms"
     tool_binary = ""
     description = "HTML form security analysis (autocomplete, CSRF, password masking)"
+    target_type = "both"
 
     def check_installed(self) -> tuple[bool, str]:
         return True, "built-in"
@@ -91,11 +104,17 @@ class FormsModule(BaseModule):
         return "built-in"
 
     def execute(self, target: str) -> list[Finding]:
-        body = self._fetch_page(target)
-        if body is None:
-            return []
-        self._save_raw_output(body, "forms-raw.txt")
-        return self.parse_output(body, target)
+        source_path = self.config.get("source_path", "")
+        target_url = self.config.get("target", "")
+        findings: list[Finding] = []
+        if source_path and os.path.isdir(source_path):
+            findings.extend(self._scan_templates(source_path))
+        if target_url:
+            body = self._fetch_page(target_url)
+            if body is not None:
+                self._save_raw_output(body, "forms-raw.txt")
+                findings.extend(self.parse_output(body, target_url))
+        return findings
 
     def _fetch_page(self, target: str) -> str | None:
         result = logged_request(target, module_name=self.name)
@@ -250,4 +269,25 @@ class FormsModule(BaseModule):
                 remediation="Ensure login forms submit to HTTPS URLs",
             ))
 
+        return findings
+
+    # -- source-code scanning -----------------------------------------------
+
+    def _scan_templates(self, source_path: str) -> list[Finding]:
+        """Scan template files in a local source tree for form security issues."""
+        findings: list[Finding] = []
+        for dirpath, dirnames, filenames in os.walk(source_path):
+            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+            for filename in filenames:
+                ext = os.path.splitext(filename)[1].lower()
+                if ext not in TEMPLATE_EXTENSIONS:
+                    continue
+                filepath = os.path.join(dirpath, filename)
+                try:
+                    with open(filepath, "r", errors="ignore") as f:
+                        content = f.read()
+                except OSError:
+                    continue
+                rel_path = os.path.relpath(filepath, source_path)
+                findings.extend(self.parse_output(content, rel_path))
         return findings

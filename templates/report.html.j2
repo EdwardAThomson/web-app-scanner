@@ -339,7 +339,7 @@
     <span class="finding-title">{{ f.title }}</span>
     <span class="sev sev-{{ f.severity }}">{{ f.severity | upper }}</span>
   </div>
-  <div class="finding-meta">Module: {{ f.source }} &middot; Category: {{ f.category }}</div>
+  <div class="finding-meta">Module: {{ f.source }} &middot; Category: {{ f.category }}{% if f.metadata and f.metadata.duplicate_count and f.metadata.duplicate_count > 1 %} &middot; <em>Merged from {{ f.metadata.duplicate_count }} reports</em>{% endif %}</div>
   <div class="finding-field">
     <div class="field-label">Description</div>
     <div class="field-value">{{ f.description }}</div>

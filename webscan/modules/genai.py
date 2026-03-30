@@ -15,6 +15,7 @@ security concerns:
 - WebSocket or streaming endpoints sent over plain HTTP
 """
 
+import os
 import re
 from html.parser import HTMLParser
 from urllib.parse import urlparse
@@ -62,6 +63,7 @@ GENAI_JS_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("Together AI", re.compile(r"together(?:\.xyz|\.ai|computer)", re.I)),
     ("Mistral", re.compile(r"mistral(?:\.ai|Client)", re.I)),
     ("Groq", re.compile(r"groq(?:\.com|Client|cloud)", re.I)),
+    ("xAI Grok", re.compile(r"xai(?:\.com|\.sf|Client|api\.x\.ai)", re.I)),
     ("Perplexity", re.compile(r"perplexity\.ai|pplx-api", re.I)),
     ("Dialogflow", re.compile(r"dialogflow(?:\.cloud\.google|\.googleapis|[/.]messenger|Messenger)", re.I)),
     ("Amazon Lex", re.compile(r"lex(?:runtime|\.aws|Client)", re.I)),
@@ -82,6 +84,7 @@ AI_KEY_PATTERNS: list[tuple[str, re.Pattern, Severity]] = [
     ("Together AI Key", re.compile(r"tog-[A-Za-z0-9\-]{40,}"), Severity.CRITICAL),
     ("Groq API Key", re.compile(r"gsk_[A-Za-z0-9]{48,}"), Severity.CRITICAL),
     ("Mistral API Key", re.compile(r"mist-[A-Za-z0-9]{32,}"), Severity.CRITICAL),
+    ("xAI (Grok) API Key", re.compile(r"xai-[A-Za-z0-9]{20,}"), Severity.CRITICAL),
 ]
 
 # Model name patterns (match in JS body) — used for model disclosure check
@@ -178,6 +181,53 @@ MAX_JS_FILES = 15
 # Maximum JS content size to scan (5 MB)
 MAX_JS_SIZE = 5 * 1024 * 1024
 
+# ---------------------------------------------------------------------------
+# Source-code scanning patterns
+# ---------------------------------------------------------------------------
+
+SKIP_DIRS = {
+    "node_modules", ".git", "__pycache__", "venv", ".venv",
+    "dist", "build", ".next", ".nuxt", ".tox", "egg-info",
+}
+SOURCE_EXTENSIONS = {".py", ".js", ".ts", ".jsx", ".tsx", ".mjs"}
+
+# Python AI library import patterns
+PYTHON_IMPORT_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("OpenAI", re.compile(r"^\s*(?:import\s+openai|from\s+openai[\s.])", re.M)),
+    ("Anthropic", re.compile(r"^\s*(?:import\s+anthropic|from\s+anthropic[\s.])", re.M)),
+    ("LangChain", re.compile(r"^\s*(?:import\s+langchain|from\s+langchain[\s._])", re.M)),
+    ("LlamaIndex", re.compile(r"^\s*(?:import\s+llama_index|from\s+llama_index[\s.])", re.M)),
+    ("Cohere", re.compile(r"^\s*(?:import\s+cohere|from\s+cohere[\s.])", re.M)),
+    ("Hugging Face", re.compile(
+        r"^\s*(?:import\s+transformers|from\s+transformers[\s.]"
+        r"|import\s+huggingface_hub|from\s+huggingface_hub[\s.])", re.M)),
+    ("Google Generative AI", re.compile(
+        r"^\s*(?:import\s+google\.generativeai|from\s+google\.generativeai"
+        r"|from\s+vertexai[\s.]|import\s+vertexai)", re.M)),
+    ("Amazon Bedrock", re.compile(r"bedrock[_-]?runtime", re.I)),
+    ("Mistral", re.compile(r"^\s*(?:import\s+mistralai|from\s+mistralai[\s.])", re.M)),
+    ("Groq", re.compile(r"^\s*(?:import\s+groq|from\s+groq[\s.])", re.M)),
+    ("Replicate", re.compile(r"^\s*(?:import\s+replicate|from\s+replicate[\s.])", re.M)),
+    ("Together AI", re.compile(r"^\s*(?:import\s+together|from\s+together[\s.])", re.M)),
+]
+
+# JS/TS import patterns for AI libraries in source files
+JS_IMPORT_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("OpenAI", re.compile(r"""(?:require\s*\(\s*['"]openai['"]|from\s+['"]openai['"])""")),
+    ("Anthropic", re.compile(r"""(?:require\s*\(\s*['"]@anthropic-ai/sdk['"]|from\s+['"]@anthropic-ai/sdk['"])""")),
+    ("LangChain", re.compile(r"""(?:require\s*\(\s*['"]langchain|from\s+['"]langchain)""")),
+    ("LlamaIndex", re.compile(r"""(?:require\s*\(\s*['"]llamaindex|from\s+['"]llamaindex)""")),
+    ("Cohere", re.compile(r"""(?:require\s*\(\s*['"]cohere-ai['"]|from\s+['"]cohere-ai['"])""")),
+    ("Vercel AI SDK", re.compile(r"""(?:require\s*\(\s*['"]ai/|from\s+['"]ai/)""")),
+    ("Google Generative AI", re.compile(r"""(?:require\s*\(\s*['"]@google/generative-ai['"]|from\s+['"]@google/generative-ai['"])""")),
+    ("Amazon Bedrock", re.compile(r"""(?:require\s*\(\s*['"]@aws-sdk/client-bedrock|from\s+['"]@aws-sdk/client-bedrock)""")),
+    ("Azure OpenAI", re.compile(r"""(?:require\s*\(\s*['"]@azure/openai['"]|from\s+['"]@azure/openai['"])""")),
+    ("Mistral", re.compile(r"""(?:require\s*\(\s*['"]@mistralai/|from\s+['"]@mistralai/)""")),
+    ("Groq", re.compile(r"""(?:require\s*\(\s*['"]groq-sdk['"]|from\s+['"]groq-sdk['"])""")),
+    ("Replicate", re.compile(r"""(?:require\s*\(\s*['"]replicate['"]|from\s+['"]replicate['"])""")),
+    ("Together AI", re.compile(r"""(?:require\s*\(\s*['"]together-ai['"]|from\s+['"]together-ai['"])""")),
+]
+
 
 # ---------------------------------------------------------------------------
 # HTML parser
@@ -242,6 +292,7 @@ class GenaiModule(BaseModule):
     name = "genai"
     tool_binary = ""
     description = "GenAI / chatbot detection and security analysis"
+    target_type = "both"
 
     def check_installed(self) -> tuple[bool, str]:
         return True, "built-in"
@@ -252,6 +303,19 @@ class GenaiModule(BaseModule):
     # -- entry point --------------------------------------------------------
 
     def execute(self, target: str) -> list[Finding]:
+        source_path = self.config.get("source_path", "")
+        target_url = self.config.get("target", "")
+        findings: list[Finding] = []
+        if source_path and os.path.isdir(source_path):
+            findings.extend(self._scan_source(source_path))
+        if target_url:
+            findings.extend(self._scan_url(target_url))
+        return findings
+
+    # -- URL scanning (original behaviour) ----------------------------------
+
+    def _scan_url(self, target: str) -> list[Finding]:
+        """Scan a live URL for GenAI / chatbot indicators."""
         body, headers = self._fetch_page(target)
         if body is None:
             return []
@@ -264,11 +328,10 @@ class GenaiModule(BaseModule):
         except Exception:
             pass
 
-        # Combine inline scripts for analysis
         inline_js = "\n".join(parser.inline_scripts)
 
         # Phase 1: detect presence in HTML + inline JS
-        detections: list[dict] = []  # {"label": ..., "source": ..., "evidence": ...}
+        detections: list[dict] = []
         detections.extend(self._detect_widgets_in_html(parser, target))
         detections.extend(self._detect_genai_in_js(inline_js, target, "inline script"))
 
@@ -279,8 +342,7 @@ class GenaiModule(BaseModule):
 
         all_js = inline_js + "\n" + "\n".join(body for _, body in js_contents)
 
-        # Phase 3: security checks (run regardless of detection count — some
-        # checks like exposed API keys are valuable even without a detected widget)
+        # Phase 3: security checks
         findings: list[Finding] = []
 
         if detections:
@@ -291,7 +353,6 @@ class GenaiModule(BaseModule):
         findings.extend(self._check_model_disclosure(all_js, target))
         findings.extend(self._check_chat_endpoints(all_js, target))
 
-        # These checks only make sense if we found chatbot / GenAI presence
         if detections:
             findings.extend(self._check_unauthenticated_access(body, all_js, target))
             findings.extend(self._check_missing_payment_gate(body, all_js, detections, target))
@@ -718,5 +779,180 @@ class GenaiModule(BaseModule):
             evidence="\n".join(sorted(insecure_urls)[:5]),
             remediation="Use HTTPS and WSS (wss://) for all AI and chat traffic.",
         ))
+
+        return findings
+
+    # -- source-code scanning -----------------------------------------------
+
+    def _scan_source(self, source_path: str) -> list[Finding]:
+        """Scan local source files for GenAI usage patterns and security issues."""
+        findings: list[Finding] = []
+        detections: list[dict] = []
+        prompt_hits: list[tuple[str, str]] = []  # (rel_path, snippet)
+        models_by_file: dict[str, set[str]] = {}  # rel_path -> model names
+
+        for rel_path, content in self._walk_source_files(source_path):
+            detections.extend(self._detect_source_imports(rel_path, content))
+            findings.extend(self._check_source_api_keys(content, rel_path))
+
+            for m in SYSTEM_PROMPT_RE.finditer(content):
+                start = max(0, m.start() - 40)
+                end = min(len(content), m.end() + 120)
+                snippet = content[start:end].replace("\n", " ").strip()
+                prompt_hits.append((rel_path, snippet))
+
+            for m in MODEL_NAME_RE.finditer(content):
+                model = m.group(1).lower()
+                models_by_file.setdefault(rel_path, set()).add(model)
+
+        # Save raw output
+        raw_lines = [f"[{d['label']}] {d['source']}: {d['evidence']}" for d in detections]
+        self._save_raw_output(
+            "\n".join(raw_lines) or "(no GenAI indicators found in source)",
+            "genai-source-raw.txt",
+        )
+
+        if detections:
+            findings.insert(0, self._summarize_detections(detections, source_path))
+
+        if prompt_hits:
+            snippets = [f"{path}: ...{snip}..." for path, snip in prompt_hits[:10]]
+            findings.append(Finding(
+                title=(
+                    f"System prompts or LLM instructions in source code "
+                    f"({len(prompt_hits)} occurrence{'s' if len(prompt_hits) != 1 else ''})"
+                ),
+                severity=Severity.MEDIUM,
+                category=Category.MISCONFIGURATION,
+                source=self.name,
+                description=(
+                    "Patterns resembling LLM system prompts or role instructions were "
+                    "found in source files. Exposed system prompts let attackers "
+                    "understand guardrails and craft targeted prompt injection attacks."
+                ),
+                location=source_path,
+                evidence="\n".join(snippets),
+                remediation=(
+                    "Store system prompts in environment variables or a secrets "
+                    "manager rather than hardcoding them. Ensure the repository is "
+                    "private and prompts are not shipped to the client."
+                ),
+                reference="https://owasp.org/www-project-top-10-for-large-language-model-applications/",
+            ))
+
+        if models_by_file:
+            all_models: set[str] = set()
+            evidence_lines: list[str] = []
+            for path, models in sorted(models_by_file.items()):
+                all_models.update(models)
+                evidence_lines.append(f"{path}: {', '.join(sorted(models))}")
+            findings.append(Finding(
+                title=f"AI model name(s) hardcoded in source ({len(all_models)})",
+                severity=Severity.LOW,
+                category=Category.MISCONFIGURATION,
+                source=self.name,
+                description=(
+                    f"The following model identifiers were found in source code: "
+                    f"{', '.join(sorted(all_models))}. Hardcoded model names reveal "
+                    "technology choices and help attackers tailor prompt injection "
+                    "payloads to specific model weaknesses."
+                ),
+                location=source_path,
+                evidence="\n".join(evidence_lines[:15]),
+                remediation=(
+                    "Reference models by an internal alias or environment variable "
+                    "and resolve to the actual model name at runtime."
+                ),
+            ))
+
+        return findings
+
+    def _walk_source_files(self, source_path: str):
+        """Yield (rel_path, content) for source files in the directory tree."""
+        for dirpath, dirnames, filenames in os.walk(source_path):
+            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+            for filename in filenames:
+                ext = os.path.splitext(filename)[1].lower()
+                if ext not in SOURCE_EXTENSIONS:
+                    continue
+                filepath = os.path.join(dirpath, filename)
+                try:
+                    if os.path.getsize(filepath) > MAX_JS_SIZE:
+                        continue
+                    with open(filepath, "r", errors="ignore") as f:
+                        content = f.read()
+                except OSError:
+                    continue
+                yield os.path.relpath(filepath, source_path), content
+
+    def _detect_source_imports(self, rel_path: str, content: str) -> list[dict]:
+        """Detect AI library imports in a source file."""
+        detections: list[dict] = []
+        seen_labels: set[str] = set()
+
+        if rel_path.endswith(".py"):
+            patterns = PYTHON_IMPORT_PATTERNS
+        elif rel_path.endswith((".js", ".ts", ".jsx", ".tsx", ".mjs")):
+            patterns = JS_IMPORT_PATTERNS
+        else:
+            return detections
+
+        for label, pattern in patterns:
+            if label in seen_labels:
+                continue
+            match = pattern.search(content)
+            if match:
+                seen_labels.add(label)
+                line_num = content[:match.start()].count("\n") + 1
+                nl = content.find("\n", match.start())
+                line = content[match.start():nl if nl != -1 else len(content)].strip()
+                detections.append({
+                    "label": label,
+                    "source": f"source file ({rel_path}:{line_num})",
+                    "evidence": line[:120],
+                })
+
+        return detections
+
+    def _check_source_api_keys(self, content: str, rel_path: str) -> list[Finding]:
+        """Scan a source file for exposed AI-provider API keys."""
+        findings: list[Finding] = []
+        seen: set[str] = set()
+
+        for key_name, pattern, severity in AI_KEY_PATTERNS:
+            for match in pattern.finditer(content):
+                matched_text = match.group(0)
+                dedup = f"{key_name}:{matched_text[:12]}"
+                if dedup in seen:
+                    continue
+                seen.add(dedup)
+
+                line_num = content[:match.start()].count("\n") + 1
+                if len(matched_text) > 12:
+                    redacted = matched_text[:6] + "..." + matched_text[-4:]
+                else:
+                    redacted = matched_text[:4] + "..."
+
+                findings.append(Finding(
+                    title=f"{key_name} found in source code",
+                    severity=severity,
+                    category=Category.SECRET,
+                    source=self.name,
+                    description=(
+                        f"A pattern matching {key_name} was found in {rel_path} "
+                        f"at line {line_num}. If committed to version control, this "
+                        "key may be exposed. Rotate the key immediately if it was "
+                        "ever pushed to a remote repository."
+                    ),
+                    location=f"{rel_path}:{line_num}",
+                    evidence=f"Redacted: {redacted}",
+                    remediation=(
+                        "Move the API key to an environment variable or secrets "
+                        "manager. Never commit AI-provider secrets to source control. "
+                        "Rotate the key immediately."
+                    ),
+                    reference="https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/",
+                    metadata={"key_type": key_name},
+                ))
 
         return findings

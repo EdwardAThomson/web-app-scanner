@@ -155,3 +155,83 @@ class TestNoForms:
         module = _make_module()
         findings = module.parse_output(body, "https://example.com")
         assert len(findings) == 0
+
+
+# ---------------------------------------------------------------------------
+# Template scanning (source)
+# ---------------------------------------------------------------------------
+
+
+class TestTemplateScanning:
+    def test_scans_html_templates(self, tmp_path):
+        template = tmp_path / "login.html"
+        template.write_text(
+            '<form method="post" action="/login">\n'
+            '    <input type="text" name="password">\n'
+            '    <button>Login</button>\n'
+            '</form>'
+        )
+        module = FormsModule({"source_path": str(tmp_path)})
+        findings = module._scan_templates(str(tmp_path))
+        assert any("not masked" in f.title.lower() for f in findings)
+
+    def test_scans_jsx_templates(self, tmp_path):
+        template = tmp_path / "Login.jsx"
+        template.write_text(
+            '<form method="post" action="http://insecure.com/login">\n'
+            '    <input type="password" name="password" />\n'
+            '</form>'
+        )
+        module = FormsModule({"source_path": str(tmp_path)})
+        findings = module._scan_templates(str(tmp_path))
+        assert any("insecure HTTP" in f.title for f in findings)
+
+    def test_detects_missing_csrf_in_template(self, tmp_path):
+        template = tmp_path / "transfer.html"
+        template.write_text(
+            '<form method="post" action="/transfer">\n'
+            '    <input type="text" name="amount">\n'
+            '    <input type="text" name="recipient">\n'
+            '    <button>Send</button>\n'
+            '</form>'
+        )
+        module = FormsModule({"source_path": str(tmp_path)})
+        findings = module._scan_templates(str(tmp_path))
+        assert any("CSRF" in f.title for f in findings)
+
+    def test_skips_non_template_files(self, tmp_path):
+        py_file = tmp_path / "app.py"
+        py_file.write_text("def login(): pass")
+        module = FormsModule({"source_path": str(tmp_path)})
+        findings = module._scan_templates(str(tmp_path))
+        assert len(findings) == 0
+
+    def test_skips_node_modules(self, tmp_path):
+        nm = tmp_path / "node_modules" / "pkg"
+        nm.mkdir(parents=True)
+        (nm / "form.html").write_text(
+            '<form method="post"><input type="text" name="password"></form>'
+        )
+        module = FormsModule({"source_path": str(tmp_path)})
+        findings = module._scan_templates(str(tmp_path))
+        assert len(findings) == 0
+
+    def test_target_type_is_both(self):
+        assert FormsModule.target_type == "both"
+
+    def test_execute_dispatches_to_source(self, tmp_path):
+        template = tmp_path / "form.html"
+        template.write_text(
+            '<form method="post" action="/submit">\n'
+            '    <input type="text" name="amount">\n'
+            '    <input type="text" name="recipient">\n'
+            '    <button>Send</button>\n'
+            '</form>'
+        )
+        module = FormsModule({
+            "source_path": str(tmp_path),
+            "target": "",
+            "scan_dir": str(tmp_path),
+        })
+        findings = module.execute(str(tmp_path))
+        assert any("CSRF" in f.title for f in findings)

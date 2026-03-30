@@ -185,3 +185,63 @@ class TestAPIKeys:
         findings = module.parse_output(body, "https://example.com")
         key_findings = [f for f in findings if "AWS Access Key" in f.title]
         assert len(key_findings) == 1  # Deduplicated
+
+
+# ---------------------------------------------------------------------------
+# Source file scanning
+# ---------------------------------------------------------------------------
+
+
+class TestSourceFileScanning:
+    def test_detects_api_key_in_source(self, tmp_path):
+        py_file = tmp_path / "config.py"
+        py_file.write_text('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n')
+        module = DisclosureModule({"source_path": str(tmp_path), "scan_dir": str(tmp_path)})
+        findings = module._scan_source_files(str(tmp_path))
+        key_findings = [f for f in findings if "AWS" in f.title]
+        assert len(key_findings) == 1
+
+    def test_detects_email_in_source(self, tmp_path):
+        js_file = tmp_path / "contact.js"
+        js_file.write_text('const admin = "admin@company.com";\n')
+        module = DisclosureModule({"source_path": str(tmp_path), "scan_dir": str(tmp_path)})
+        findings = module._scan_source_files(str(tmp_path))
+        email_findings = [f for f in findings if "email" in f.title.lower()]
+        assert len(email_findings) == 1
+
+    def test_detects_internal_ip_in_source(self, tmp_path):
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text("database_host: 10.0.1.50\n")
+        module = DisclosureModule({"source_path": str(tmp_path), "scan_dir": str(tmp_path)})
+        findings = module._scan_source_files(str(tmp_path))
+        ip_findings = [f for f in findings if "Internal IP" in f.title]
+        assert len(ip_findings) == 1
+
+    def test_skips_node_modules(self, tmp_path):
+        nm = tmp_path / "node_modules" / "pkg"
+        nm.mkdir(parents=True)
+        (nm / "index.js").write_text('const key = "AKIAIOSFODNN7EXAMPLE";\n')
+        module = DisclosureModule({"source_path": str(tmp_path), "scan_dir": str(tmp_path)})
+        findings = module._scan_source_files(str(tmp_path))
+        assert len(findings) == 0
+
+    def test_skips_non_source_extensions(self, tmp_path):
+        img = tmp_path / "logo.png"
+        img.write_bytes(b"\x89PNG\r\n")
+        module = DisclosureModule({"source_path": str(tmp_path), "scan_dir": str(tmp_path)})
+        findings = module._scan_source_files(str(tmp_path))
+        assert len(findings) == 0
+
+    def test_target_type_is_both(self):
+        assert DisclosureModule.target_type == "both"
+
+    def test_execute_dispatches_to_source(self, tmp_path):
+        py_file = tmp_path / "secret.py"
+        py_file.write_text('KEY = "AKIAIOSFODNN7EXAMPLE"\n')
+        module = DisclosureModule({
+            "source_path": str(tmp_path),
+            "target": "",
+            "scan_dir": str(tmp_path),
+        })
+        findings = module.execute(str(tmp_path))
+        assert any("AWS" in f.title for f in findings)

@@ -122,3 +122,15 @@ class TestScanResult:
         s = sr.summary()
         assert s["total_findings"] == 0
         assert s["modules_run"] == 0
+
+
+class TestSeverityRank:
+    def test_ordering(self):
+        assert Severity.rank(Severity.CRITICAL) > Severity.rank(Severity.HIGH)
+        assert Severity.rank(Severity.HIGH) > Severity.rank(Severity.MEDIUM)
+        assert Severity.rank(Severity.MEDIUM) > Severity.rank(Severity.LOW)
+        assert Severity.rank(Severity.LOW) > Severity.rank(Severity.INFO)
+
+    def test_all_values_mapped(self):
+        for sev in Severity:
+            assert isinstance(Severity.rank(sev), int)
