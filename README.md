@@ -4,9 +4,12 @@ A security testing orchestrator for web applications. Wraps open source tools an
 
 ## What it does
 
-- Runs 14 security modules against your web apps and source code
+- Runs 16 security modules against your web apps and source code
 - Checks against a 150+ item security checklist (based on OWASP, modernized)
 - Produces reports in JSON, HTML, Markdown, CSV, PDF, and Excel
+- Baseline diff mode (`--diff`) compares scans to show new, fixed, and persistent findings
+- CI-friendly exit codes (`--fail-on`) to gate deployments on finding severity
+- Cross-module finding deduplication — same issue from multiple tools appears once
 - Logs all HTTP requests for evidence and audit
 - All external tools are open source, cloned and built from source
 - Works with any combination of tools installed — missing tools are skipped gracefully
@@ -41,11 +44,17 @@ webscan run all -t https://your-site.com -s /path/to/your/repo
 
 # Generate HTML and PDF reports
 webscan run all -t https://your-site.com -f html -f pdf
+
+# Compare against a previous scan
+webscan run all -t https://your-site.com --diff ./webscan-results/previous/webscan-*.json
+
+# Fail CI if high or critical findings exist
+webscan run all -t https://your-site.com --fail-on high
 ```
 
 ## Installing tools
 
-webscan has 14 modules. 6 are built-in (pure Python, no dependencies). 8 wrap external open source tools that need to be installed separately.
+webscan has 16 modules. 8 are built-in (pure Python, no dependencies). 8 wrap external open source tools that need to be installed separately.
 
 **You don't need all tools installed to use webscan.** If a tool is missing, its module is skipped and the scan continues with the remaining modules. The report shows which modules ran and which were skipped.
 
@@ -76,25 +85,29 @@ The external tools have these build dependencies:
 | **Perl 5** | nikto | Usually pre-installed on Linux/macOS |
 | **Python 3.10+** | semgrep, sqlmap, webscan itself | Required |
 
-If Go is not installed, the 4 Go-based tools will be skipped. The remaining 10 modules (including all 6 built-in modules) work without Go.
+If Go is not installed, the 4 Go-based tools will be skipped. The remaining 12 modules (including all 8 built-in modules) work without Go.
 
-If no external tools are installed at all, the 6 built-in modules still run:
+If no external tools are installed at all, the 8 built-in modules still run:
 
-- **headers** — security headers, cookies, CORS, HTTPS enforcement, robots.txt, security.txt
+- **headers** — security headers, cookies, CORS, HTTPS enforcement, server version/CVE detection, robots.txt, security.txt
 - **disclosure** — HTML comments, emails, internal IPs, API keys in pages/JS
 - **forms** — autocomplete, CSRF tokens, password masking
 - **session** — session ID entropy, predictability, cookie attributes
 - **api_routes** — route discovery and unauthenticated access testing
 - **deps** — npm dependency supply chain audit
+- **genai** — generative AI integration security (chatbot detection, prompt injection surfaces, AI-related data exposure)
+- **spider** — site crawling with configurable depth, page limits, and robots.txt respect
 
 ## Modules
 
 | Module | Type | Tool | What it checks |
 |--------|------|------|----------------|
-| headers | Remote | built-in | Security headers, cookies, CORS, HTTPS enforcement |
+| spider | Remote | built-in | Site crawling, link discovery, page enumeration |
+| headers | Remote | built-in | Security headers, cookies, CORS, HTTPS, server version/CVE detection |
 | disclosure | Remote | built-in | HTML comments, emails, internal IPs, API keys, SRI |
 | forms | Remote | built-in | Autocomplete, CSRF tokens, password masking |
 | session | Remote | built-in | Session ID entropy, predictability, cookie attributes |
+| genai | Remote | built-in | AI chatbot detection, prompt injection surfaces, AI data exposure |
 | api_routes | Both | built-in | Route discovery from source + unauth access testing |
 | deps | Local | built-in | Typosquats, lifecycle scripts, package popularity, suspicious code |
 | testssl | Remote | testssl.sh | TLS/SSL protocols, ciphers, certificates |
@@ -113,8 +126,10 @@ Reports include:
 - Severity breakdown (critical/high/medium/low/info)
 - Checklist coverage (tested, passed, issues found, manual review needed)
 - Modules run and modules not run
-- Individual findings with evidence and remediation
+- Individual findings with evidence and remediation (deduplicated across modules)
+- Baseline diff section when `--diff` is used (new, fixed, persistent findings)
 - Passed checks (tested and found no issues)
+- Raw findings export (`findings-raw.json`) — complete unprocessed list before dedup
 - HTTP request/response log
 
 ## Try it out
@@ -126,7 +141,7 @@ A deliberately vulnerable test server is included so you can see webscan in acti
 python tests/test_server.py &
 
 # Scan it with the built-in modules (no external tools needed)
-webscan run headers disclosure forms session -t http://127.0.0.1:8999 -f html
+webscan run spider headers disclosure forms session genai -t http://127.0.0.1:8999 -f html
 
 # Open the HTML report in your browser
 ```
