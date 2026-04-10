@@ -110,14 +110,14 @@ If no external tools are installed at all, the 8 built-in modules still run:
 | genai | Remote | built-in | AI chatbot detection, prompt injection surfaces, AI data exposure |
 | api_routes | Both | built-in | Route discovery from source + unauth access testing |
 | deps | Local | built-in | Typosquats, lifecycle scripts, package popularity, suspicious code |
-| testssl | Remote | testssl.sh | TLS/SSL protocols, ciphers, certificates |
-| nuclei | Remote | Nuclei | CVEs, misconfigurations, exposures (template-based) |
-| nikto | Remote | Nikto | Web server misconfigurations |
-| ffuf | Remote | ffuf | Directory and file discovery |
-| sqlmap | Remote | SQLMap | SQL injection |
-| semgrep | Local | Semgrep | Static code analysis (XSS, injection, insecure patterns) |
-| trivy | Local | Trivy | Dependency vulnerabilities, container scanning |
-| gitleaks | Local | Gitleaks | Secrets in git history |
+| testssl | Remote | [testssl.sh](https://github.com/testssl/testssl.sh) | TLS/SSL protocols, ciphers, certificates |
+| nuclei | Remote | [Nuclei](https://github.com/projectdiscovery/nuclei) | CVEs, misconfigurations, exposures (template-based) |
+| nikto | Remote | [Nikto](https://github.com/sullo/nikto) | Web server misconfigurations |
+| ffuf | Remote | [ffuf](https://github.com/ffuf/ffuf) | Directory and file discovery |
+| sqlmap | Remote | [SQLMap](https://github.com/sqlmapproject/sqlmap) | SQL injection |
+| semgrep | Local | [Semgrep](https://github.com/semgrep/semgrep) | Static code analysis (XSS, injection, insecure patterns) |
+| trivy | Local | [Trivy](https://github.com/aquasecurity/trivy) | Dependency vulnerabilities, container scanning |
+| gitleaks | Local | [Gitleaks](https://github.com/gitleaks/gitleaks) | Secrets in git history |
 
 ## Reports
 

@@ -52,16 +52,16 @@ Skipping gitleaks (needs -s/--source)
 
 ## Tools by license
 
-| Tool | License | Language | Install method |
-|------|---------|----------|---------------|
-| testssl.sh | GPL-2.0 | Bash | git clone |
-| Nuclei | MIT | Go | clone + go build |
-| Gitleaks | MIT | Go | clone + go build |
-| Nikto | GPL | Perl | git clone + cpan modules |
-| Semgrep | LGPL-2.1 | Python | pip |
-| Trivy | Apache-2.0 | Go | clone + go build (v0.58.2) |
-| ffuf | MIT | Go | clone + go build |
-| SQLMap | GPL-2.0 | Python | git clone |
+| Tool | Repository | License | Language | Install method |
+|------|------------|---------|----------|---------------|
+| testssl.sh | [testssl/testssl.sh](https://github.com/testssl/testssl.sh) | GPL-2.0 | Bash | git clone |
+| Nuclei | [projectdiscovery/nuclei](https://github.com/projectdiscovery/nuclei) | MIT | Go | clone + go build |
+| Gitleaks | [gitleaks/gitleaks](https://github.com/gitleaks/gitleaks) | MIT | Go | clone + go build |
+| Nikto | [sullo/nikto](https://github.com/sullo/nikto) | GPL | Perl | git clone + cpan modules |
+| Semgrep | [semgrep/semgrep](https://github.com/semgrep/semgrep) | LGPL-2.1 | Python | pip |
+| Trivy | [aquasecurity/trivy](https://github.com/aquasecurity/trivy) | Apache-2.0 | Go | clone + go build (v0.58.2) |
+| ffuf | [ffuf/ffuf](https://github.com/ffuf/ffuf) | MIT | Go | clone + go build |
+| SQLMap | [sqlmapproject/sqlmap](https://github.com/sqlmapproject/sqlmap) | GPL-2.0 | Python | git clone |
 
 Built-in modules (headers, disclosure, forms, session, api_routes, deps) are pure Python with no external tool dependencies.
 
